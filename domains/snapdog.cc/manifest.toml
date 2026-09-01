@@ -1,0 +1,31 @@
+[domain]
+host = "deb.snapdog.cc"
+base_url = "https://deb.snapdog.cc"
+origin = "SnapDogRocks"
+keyring_package = "snapdog-archive-keyring"
+keyring_file = "/usr/share/keyrings/snapdog-archive-keyring.pgp"
+
+[signing]
+primary_fingerprint = "TBD"
+signing_subkey = "TBD"
+
+[publication]
+r2_bucket = "TBD"
+r2_account_id = "9122b44fa4c05b23985d6a0b779caa01"
+
+[release]
+suite = "rolling"
+codename = "rolling"
+components = ["main"]
+architectures = ["amd64", "arm64"]
+acquire_by_hash = true
+valid_until_days = 180
+
+# snapdog liefert zwei Binaerpakete aus einem Release. Der Renderer muss also
+# mehrere Pakete je Architektur und mehrere Versionen im Pool koennen; der
+# uebernommene aros-tools-Renderer kann beides nicht und wird neu geschrieben.
+[[projects]]
+name = "snapdog"
+prefix = "/snapdog"
+source_repo = "SnapDogRocks/snapdog"
+packages = ["snapdog", "snapdog-client"]

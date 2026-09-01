@@ -1,0 +1,24 @@
+# Muster bewusst UNVERANKERT, damit sie auf jeder Ebene greifen.
+node_modules/
+target/
+dist/
+build/
+__pycache__/
+*.pyc
+
+# Archiv-Zwischenstaende gehoeren nie ins Repository
+staging/
+out/
+*.deb
+*.asc
+*.gpg
+*.pgp
+!contracts/*.pgp
+
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.idea/
+.vscode/

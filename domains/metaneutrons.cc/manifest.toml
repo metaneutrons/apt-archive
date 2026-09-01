@@ -1,0 +1,49 @@
+# Ein Archiv-Domain-Manifest. Alles Domain-Spezifische steht hier, der Renderer
+# und die Workflows sind gemeinsam. Eine spaetere Abspaltung verschiebt dieses
+# Verzeichnis in ein eigenes Repository, ohne dass Code mitwandert.
+
+[domain]
+host = "deb.metaneutrons.cc"
+base_url = "https://deb.metaneutrons.cc"
+origin = "metaneutrons"
+keyring_package = "metaneutrons-archive-keyring"
+keyring_file = "/usr/share/keyrings/metaneutrons-archive-keyring.pgp"
+
+[signing]
+# Primaerschluessel ist certify-only und bleibt offline. Signiert wird mit dem
+# Domain-Subkey, gepinnt per abschliessendem Ausrufezeichen. Beide Werte werden
+# bei der Schluesselerzeugung eingetragen und danach nur bei Rotation geaendert.
+primary_fingerprint = "TBD"
+signing_subkey = "TBD"
+
+[publication]
+r2_bucket = "TBD"
+r2_account_id = "9122b44fa4c05b23985d6a0b779caa01"
+
+[release]
+suite = "rolling"
+codename = "rolling"
+components = ["main"]
+architectures = ["amd64", "arm64"]
+acquire_by_hash = true
+valid_until_days = 180
+
+# Jedes Projekt bekommt ein eigenes Praefix und damit eine eigene
+# Valid-Until-Uhr. Ein vernachlaessigtes Projekt reisst so nicht die uebrigen mit.
+[[projects]]
+name = "aros-tools"
+prefix = "/aros-tools"
+source_repo = "metaneutrons/aros-tools"
+packages = ["aros-tools"]
+
+[[projects]]
+name = "devserial-mcp"
+prefix = "/devserial-mcp"
+source_repo = "metaneutrons/devserial-mcp"
+packages = ["devserial-mcp"]
+
+[[projects]]
+name = "ugos-cli"
+prefix = "/ugos-cli"
+source_repo = "metaneutrons/ugos-cli"
+packages = ["ugos-cli"]
