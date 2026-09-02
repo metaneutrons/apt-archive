@@ -14,10 +14,21 @@ holt sie, prüft die Attestation, rendert die Metadaten und veröffentlicht.
 
 ## Was hier nicht liegt
 
-Kein Schlüsselmaterial. Der Certify-only-Primärschlüssel ist offline, die
-Signing-Subkeys liegen auf einem Hardware-Token. Die Pipeline rendert die
-Metadaten und lädt sie als Artefakt hoch; signiert wird lokal, danach
-verifiziert und veröffentlicht die Pipeline.
+Der Certify-only-Primärschlüssel. Er wird offline erzeugt und bleibt es; sein
+geheimer Teil verlässt den Tresor nie. In CI liegt ausschließlich ein Export
+der Signing-Subkeys, je Domain in einer eigenen Environment als
+`APT_GPG_PRIVATE_KEY`.
+
+Dass es wirklich nur die Subkeys sind, prüft `verify-signing-bundle.sh` am
+importierten Material und nicht am Armor: im `sec`-Datensatz von
+`--with-colons` muss Feld 15 ein `#` tragen, das Kennzeichen für einen
+Primärschlüssel ohne geheimen Teil. Fehlt das `#`, bricht die Signatur ab,
+bevor sie beginnt. Von außen ist einem Schlüsselblock nicht anzusehen, was er
+enthält, deshalb ist diese Prüfung kein Zusatz, sondern die Bedingung.
+
+Signiert wird mit dem Domain-Subkey, gepinnt per abschließendem
+Ausrufezeichen; ohne das Pinning wählt gpg selbst, und die Wahl steht dann
+nicht im Manifest.
 
 ## Aufbau
 
@@ -68,4 +79,27 @@ signierenden Subkey melden und nicht den Primärschlüssel.
 
 ## Stand
 
-Im Aufbau. Nichts ist veröffentlicht, die Schlüssel sind noch nicht erzeugt.
+Nichts ist veröffentlicht. Die Kette steht vollständig und ist durch die
+Vertragssuiten abgedeckt, es fehlen die Voraussetzungen auf beiden Seiten.
+
+Diesseits fehlt das Schlüsselmaterial. `primary_fingerprint`, `signing_subkey`
+und `r2_bucket` stehen in beiden Manifesten auf `TBD`; `sign-archive.sh` und
+`publication_plan.py` brechen darauf ab, statt einen Platzhalter zu signieren.
+
+Jenseits fehlt bei jedem einzelnen Projekt eine Voraussetzung. Stand
+2. September 2026:
+
+| Projekt | Releases | `.deb` im Release | Attestierung |
+| --- | --- | --- | --- |
+| `aros-tools` | keine | — | `release.yml` attestiert |
+| `devserial-mcp` | 4 | keine | nein |
+| `ugos-cli` | 14 | keine | nein |
+| `snapdog` | 30 | vier, passend | nein |
+
+`devserial-mcp` und `ugos-cli` liefern nur Tarballs und Zips; für sie gibt es
+nichts zu holen, bis ihre Release-Workflows Debian-Pakete bauen. `snapdog`
+liefert genau die erwarteten vier Pakete, aber ohne Provenance: die
+Attestierungs-API antwortet für den SHA256 von `snapdog_0.27.1-1_amd64.deb`
+mit 404. `fetch-packages.sh` bricht darauf ab und warnt nicht, und das ist
+Absicht: ein Asset beweist nur, dass ein Konto es hochladen durfte, eine
+Attestierung bindet es an eine Workflow-Identität.
