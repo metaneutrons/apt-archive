@@ -13,8 +13,8 @@ keyring_file = "/usr/share/keyrings/metaneutrons-archive-keyring.pgp"
 # Primaerschluessel ist certify-only und bleibt offline. Signiert wird mit dem
 # Domain-Subkey, gepinnt per abschliessendem Ausrufezeichen. Beide Werte werden
 # bei der Schluesselerzeugung eingetragen und danach nur bei Rotation geaendert.
-primary_fingerprint = "TBD"
-signing_subkey = "TBD"
+primary_fingerprint = "1B7B79417383648BBFBE282E01AB8296EF0FCD76"
+signing_subkey = "A0C21782FC507CCBD666F3ED242072FEC8BE54A4"
 
 [publication]
 r2_bucket = "deb-metaneutrons-cc"

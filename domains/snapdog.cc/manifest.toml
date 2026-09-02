@@ -6,8 +6,8 @@ keyring_package = "snapdog-archive-keyring"
 keyring_file = "/usr/share/keyrings/snapdog-archive-keyring.pgp"
 
 [signing]
-primary_fingerprint = "TBD"
-signing_subkey = "TBD"
+primary_fingerprint = "1B7B79417383648BBFBE282E01AB8296EF0FCD76"
+signing_subkey = "CFE7BACA652DD0D72EB7156FC7252FAD41F8F7DA"
 
 [publication]
 r2_bucket = "deb-snapdog-cc"
