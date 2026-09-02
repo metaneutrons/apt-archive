@@ -31,6 +31,24 @@ jobs:
           set -euo pipefail
           find scripts tests -type f -name '*.sh' -print0 | xargs -0 shellcheck -S warning
           find scripts tests -type f -name '*.sh' -print0 | xargs -0 -n 1 bash -n
+          if grep -REn '(^|[^[:alnum:]_])(mapfile|readarray)([^[:alnum:]_]|$)|\$\{[^}]*\^\^' scripts tests; then
+            echo '::error::Bash newer than macOS Bash 3.2 is not allowed'
+            exit 1
+          fi
+
+      - name: Lefthook configuration parses
+        run: |
+          set -euo pipefail
+          tool="$RUNNER_TEMP/lefthook"
+          archive="$RUNNER_TEMP/lefthook.gz"
+          curl -fsSLo "$archive" \
+            https://github.com/evilmartians/lefthook/releases/download/v2.1.10/lefthook_2.1.10_Linux_x86_64.gz
+          printf '%s  %s\n' \
+            '0b14162a0bb2f0c64ae0759f6102f6e19c4d00981666a8ac73d4f5a6878ada4f' \
+            "$archive" | sha256sum -c -
+          gzip -dc "$archive" > "$tool"
+          chmod +x "$tool"
+          "$tool" validate
 
       # tomllib braucht 3.11; ubuntu-24.04 liefert 3.12.
       - name: Python parses
@@ -72,6 +90,12 @@ jobs:
 
       - name: Renderer contract
         run: bash tests/test_render_archive.sh
+
+      - name: GitHub release selection contract
+        run: bash tests/test_select_assets.sh
+
+      - name: Fetch diagnostics contract
+        run: bash tests/test_fetch_packages.sh
 
       - name: Signing contract
         run: bash tests/test_signing.sh
@@ -117,18 +141,61 @@ jobs:
           PY
           ./scripts/render-archive.sh --manifest "$work/m.toml" --project demo \
             --pool-dir "$work/pool" --output-dir "$work/container" \
-            --metadata-epoch 1700000000
+            --publication-epoch 1700000000
           AR_RENDER_LOCAL=1 ./scripts/render-archive.sh --manifest "$work/m.toml" \
             --project demo --pool-dir "$work/pool" --output-dir "$work/local" \
-            --metadata-epoch 1700000000
+            --publication-epoch 1700000000
           diff -r "$work/container" "$work/local"
           echo 'container and local output are identical'
+
+  commit-hygiene:
+    name: Commit-Hygiene
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: PR title, body and every commit are clean
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          status=0
+          cc='^((feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+\))?!?: .+|Revert ".+")'
+          ban='co-authored-by:.*(claude|anthropic)|generated with.*claude code'
+          if ! printf '%s' "$PR_TITLE" | grep -Eq "$cc"; then
+            echo "::error::PR title does not follow Conventional Commits: $PR_TITLE"
+            status=1
+          fi
+          if printf '%s' "$PR_BODY" | grep -Eiq "$ban"; then
+            echo '::error::PR body contains a prohibited AI attribution.'
+            status=1
+          fi
+          for sha in $(git rev-list "${BASE_SHA}..${HEAD_SHA}"); do
+            if git log -1 --format=%B "$sha" | grep -Eiq "$ban"; then
+              echo "::error::commit $sha contains a prohibited AI attribution."
+              status=1
+            fi
+            email=$(git log -1 --format='%ae%n%ce' "$sha")
+            if printf '%s' "$email" | grep -Fq 'noreply@anthropic.com'; then
+              echo "::error::commit $sha uses a prohibited author or committer address."
+              status=1
+            fi
+          done
+          exit "$status"
 
   ci-success:
     name: CI success
     if: always()
-    needs: [checks, container]
+    needs: [checks, container, commit-hygiene]
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       # Ein `needs` allein genuegt nicht: bei `if: always()` laeuft dieser Job
       # auch, wenn ein vorangehender fehlschlug. Ohne die Pruefung waere der

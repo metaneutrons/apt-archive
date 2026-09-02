@@ -2,7 +2,8 @@
 # Laedt einen signierten Archivbaum in den R2-Bucket seiner Domain.
 #
 #   publish-archive.sh --manifest domains/<host>/manifest.toml \
-#                      --project <name> --archive-dir <wurzel> [--preflight]
+#                      --project <name> --archive-dir <wurzel> \
+#                      --publication-epoch <epoch> [--preflight]
 #
 # Zugangsdaten kommen aus der Umgebung, nie aus Argumenten:
 #   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
@@ -23,23 +24,26 @@ fail() { printf '::error::AR150 %s\n' "$*" >&2; exit 1; }
 # einem Workflow bliebe nur "Process completed with exit code 1" stehen.
 opt_value() { [[ $# -ge 2 && -n "$2" ]] || fail "$1 requires a value"; }
 
-manifest=''; project=''; archive_dir=''; preflight=0
+manifest=''; project=''; archive_dir=''; publication_epoch=''; preflight=0
 while (($#)); do
   case "$1" in
     --manifest)    opt_value "$@"; manifest=$2; shift 2 ;;
     --project)     opt_value "$@"; project=$2; shift 2 ;;
     --archive-dir) opt_value "$@"; archive_dir=$2; shift 2 ;;
+    --publication-epoch) opt_value "$@"; publication_epoch=$2; shift 2 ;;
     --preflight)   preflight=1; shift ;;
     *) fail "unknown argument: $1" ;;
   esac
 done
-for name in manifest project archive_dir; do
+for name in manifest project archive_dir publication_epoch; do
   [[ -n "${!name}" ]] || fail "--${name//_/-} is required"
 done
 command -v aws >/dev/null || fail 'the AWS CLI is required for the R2 endpoint'
 command -v python3 >/dev/null || fail 'python3 is required'
 [[ -f "$manifest"    && ! -L "$manifest"    ]] || fail 'manifest must be a regular file'
 [[ -d "$archive_dir" && ! -L "$archive_dir" ]] || fail 'archive-dir must be a real directory'
+[[ "$publication_epoch" =~ ^[1-9][0-9]*$ ]] \
+  || fail 'publication-epoch must be a positive integer'
 
 : "${R2_ACCESS_KEY_ID:?R2_ACCESS_KEY_ID is not set}"
 : "${R2_SECRET_ACCESS_KEY:?R2_SECRET_ACCESS_KEY is not set}"
@@ -51,7 +55,8 @@ planner="$script_root/publication_plan.py"
 # Der Planer laeuft genau einmal. Zweimal aufgerufen koennten die Zahlen
 # auseinanderlaufen, falls sich der Baum dazwischen aendert.
 plan_json=$(python3 "$planner" --manifest "$manifest" --project "$project" \
-              --archive-dir "$archive_dir" --format json) \
+              --archive-dir "$archive_dir" --publication-epoch "$publication_epoch" \
+              --format json) \
   || fail 'cannot compute the publication plan'
 
 plan=$(printf '%s' "$plan_json" | python3 -c '
@@ -120,10 +125,21 @@ for phase in keyring pool indexes release; do
   [[ -n "$subset" ]] || continue
   count=$(printf '%s\n' "$subset" | wc -l | tr -d ' ')
 
-  # `release` bewusst sequenziell: Release, dann Release.gpg, dann InRelease.
-  # InRelease liest apt zuerst, es darf nie vor seinen Indexen oben sein.
+  # `release` bewusst ohne xargs und strikt sequenziell: Release, dann
+  # Release.gpg, dann InRelease. xargs setzt nach Exitcode 1 mit dem naechsten
+  # Datensatz fort; genau das darf bei diesen drei Metadaten nicht passieren.
+  if [[ "$phase" == release ]]; then
+    printf 'uploading phase %s, %s objects, strictly sequential\n' "$phase" "$count"
+    while IFS=$'\t' read -r _phase_name local_path object_key content_type _object_size; do
+      aws s3api --endpoint-url "$AR_ENDPOINT" put-object \
+        --bucket "$AR_BUCKET" --key "$object_key" --body "$local_path" \
+        --content-type "$content_type" >/dev/null \
+        || fail "release upload failed at $object_key; later metadata was not uploaded"
+    done <<< "$subset"
+    continue
+  fi
+
   parallel=8
-  [[ "$phase" == release ]] && parallel=1
   printf 'uploading phase %s, %s objects, parallelism %s\n' "$phase" "$count" "$parallel"
 
   printf '%s\n' "$subset" |

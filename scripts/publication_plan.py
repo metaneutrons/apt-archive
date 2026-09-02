@@ -22,6 +22,8 @@ import tomllib
 from pathlib import Path
 from typing import NoReturn
 
+from release_time import ReleaseTimeError, validate_release_time
+
 # The keyring is served at domain level, not per project, so it lands in the
 # bucket root while everything else lands under the project prefix.
 PHASES = ("keyring", "pool", "indexes", "release")
@@ -113,7 +115,7 @@ def plan(archive: Path, meta: dict) -> list[dict]:
             "size": path.stat().st_size,
         })
 
-    for suffix in (".asc", ".gpg"):
+    for suffix in (".asc", ".pgp"):
         keyring = archive / f"{meta['keyring_package']}{suffix}"
         if not keyring.is_file():
             fail(f"the domain keyring is missing: {keyring}")
@@ -148,6 +150,7 @@ def main() -> None:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--project", required=True)
     parser.add_argument("--archive-dir", type=Path, required=True)
+    parser.add_argument("--publication-epoch", type=int, required=True)
     parser.add_argument("--format", choices=("tsv", "json"), default="tsv")
     args = parser.parse_args()
 
@@ -157,7 +160,17 @@ def main() -> None:
         fail(f"archive-dir must be a real directory: {args.archive_dir}")
 
     meta = load(args.manifest, args.project)
-    entries = plan(args.archive_dir.resolve(), meta)
+    archive = args.archive_dir.resolve()
+    entries = plan(archive, meta)
+    try:
+        validate_release_time(
+            args.manifest,
+            archive / "dists" / meta["suite"] / "Release",
+            args.publication_epoch,
+            max_age_seconds=3600,
+        )
+    except ReleaseTimeError as error:
+        fail(f"Release time validation failed before publication: {error}")
 
     if args.format == "json":
         json.dump({"meta": meta, "entries": entries}, sys.stdout, indent=1)

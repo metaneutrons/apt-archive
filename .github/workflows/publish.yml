@@ -31,6 +31,10 @@ permissions:
 concurrency:
   group: publish-${{ github.event.inputs.domain || github.event.client_payload.domain }}
   cancel-in-progress: false
+  # Ein neuer Lauf darf keinen bereits wartenden Lauf einer anderen Publikation
+  # derselben Domain verdraengen. Bis zu 100 Anforderungen warten; geschrieben
+  # wird weiterhin strikt einzeln.
+  queue: max
 
 jobs:
   preflight:
@@ -88,12 +92,12 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
-          # Nur Vorhandensein und Form, nie der Wert. Auch nicht maskiert.
+          # Nur Vorhandensein und Form, nie Wert oder abgeleitete Metadaten.
           for name in APT_GPG_PRIVATE_KEY APT_GPG_PASSPHRASE \
                       R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
             eval "value=\${$name:-}"
             [ -n "$value" ] || { echo "::error::$name is not set in this environment"; exit 1; }
-            printf '  %s present, %s bytes\n' "$name" "$(printf '%s' "$value" | wc -c | tr -d ' ')"
+            printf '  %s present\n' "$name"
           done
           printf '%s' "$APT_GPG_PRIVATE_KEY" | grep -q 'BEGIN PGP PRIVATE KEY BLOCK' \
             || { echo '::error::APT_GPG_PRIVATE_KEY is not an armored private key block'; exit 1; }
@@ -108,17 +112,12 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
-          # Der Baum existiert hier noch nicht, deshalb nur die Zugangspruefung
-          # aus demselben Skript, das spaeter schreibt.
+          # Zielwerte zuerst ohne Credentials streng pruefen. Erst danach darf
+          # der read-only Bucket-Check die Environment-Secrets verwenden.
           MANIFEST="domains/${{ steps.resolve.outputs.domain }}/manifest.toml"
-          bucket=$(MANIFEST="$MANIFEST" python3 -c '
-          import os, tomllib
-          print(tomllib.load(open(os.environ["MANIFEST"], "rb"))["publication"]["r2_bucket"])')
-          account=$(MANIFEST="$MANIFEST" python3 -c '
-          import os, tomllib
-          print(tomllib.load(open(os.environ["MANIFEST"], "rb"))["publication"]["r2_account_id"])')
-          [ "$bucket" != TBD ] && [ "$account" != TBD ] \
-            || { echo '::error::the manifest still carries TBD for bucket or account'; exit 1; }
+          target=$(python3 scripts/publication_target.py --manifest "$MANIFEST") \
+            || { echo '::error::invalid R2 publication target'; exit 1; }
+          IFS=$'\t' read -r bucket account <<< "$target"
           AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID" \
           AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY" \
           AWS_DEFAULT_REGION=auto \
@@ -152,17 +151,17 @@ jobs:
       - name: Render the archive
         run: |
           set -euo pipefail
-          # SOURCE_DATE_EPOCH aus dem Commit, damit zwei Laeufe desselben
-          # Stands byteidentisch sind.
-          epoch=$(git log -1 --format=%ct)
-          printf 'metadata epoch %s\n' "$epoch"
-          echo "AR_EPOCH=$epoch" >> "$GITHUB_ENV"
+          # Intern und erst nach Fetch/Environment-Freigabe erzeugt: weder ein
+          # Dispatch-Aufrufer noch der Re-Sign-Waechter liefert diese Uhr.
+          publication_epoch=$(date -u +%s)
+          printf 'publication epoch %s\n' "$publication_epoch"
+          printf 'PUBLICATION_EPOCH=%s\n' "$publication_epoch" >> "$GITHUB_ENV"
           ./scripts/render-archive.sh \
             --manifest "domains/${{ needs.preflight.outputs.domain }}/manifest.toml" \
             --project "${{ needs.preflight.outputs.project }}" \
             --pool-dir "$RUNNER_TEMP/pool" \
             --output-dir "$RUNNER_TEMP/archive" \
-            --metadata-epoch "$epoch"
+            --publication-epoch "$publication_epoch"
 
       - name: Sign it
         env:
@@ -181,7 +180,7 @@ jobs:
             --manifest "domains/${{ needs.preflight.outputs.domain }}/manifest.toml" \
             --archive-dir "$RUNNER_TEMP/archive" \
             --private-key "$key" --passphrase-file "$pass" \
-            --metadata-epoch "$AR_EPOCH"
+            --publication-epoch "$PUBLICATION_EPOCH"
 
       - name: Publish it, objects before metadata
         env:
@@ -192,7 +191,8 @@ jobs:
           ./scripts/publish-archive.sh \
             --manifest "domains/${{ needs.preflight.outputs.domain }}/manifest.toml" \
             --project "${{ needs.preflight.outputs.project }}" \
-            --archive-dir "$RUNNER_TEMP/archive"
+            --archive-dir "$RUNNER_TEMP/archive" \
+            --publication-epoch "$PUBLICATION_EPOCH"
 
       - name: Verify what a client receives
         run: |
@@ -202,4 +202,5 @@ jobs:
           ./scripts/verify-publication.sh \
             --manifest "domains/${{ needs.preflight.outputs.domain }}/manifest.toml" \
             --project "${{ needs.preflight.outputs.project }}" \
-            --archive-dir "$RUNNER_TEMP/archive"
+            --archive-dir "$RUNNER_TEMP/archive" \
+            --publication-epoch "$PUBLICATION_EPOCH"

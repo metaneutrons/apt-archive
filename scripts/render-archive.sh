@@ -24,37 +24,37 @@ renderer="$script_root/render_archive.py"
 [[ -f "$renderer" && ! -L "$renderer" ]] || fail 'renderer is missing or unsafe'
 
 manifest=''; project=''; pool_dir=''; output_dir=''
-metadata_epoch=''; component=''
+publication_epoch=''; component=''
 while (($#)); do
   case "$1" in
     --manifest)       opt_value "$@"; manifest=$2; shift 2 ;;
     --project)        opt_value "$@"; project=$2; shift 2 ;;
     --pool-dir)       opt_value "$@"; pool_dir=$2; shift 2 ;;
     --output-dir)     opt_value "$@"; output_dir=$2; shift 2 ;;
-    --metadata-epoch) opt_value "$@"; metadata_epoch=$2; shift 2 ;;
+    --publication-epoch) opt_value "$@"; publication_epoch=$2; shift 2 ;;
     --component)      opt_value "$@"; component=$2; shift 2 ;;
     *) fail "unknown argument: $1" ;;
   esac
 done
-for name in manifest project pool_dir output_dir metadata_epoch; do
+for name in manifest project pool_dir output_dir publication_epoch; do
   [[ -n "${!name}" ]] || fail "--${name//_/-} is required"
 done
 [[ -f "$manifest" && ! -L "$manifest" ]] || fail 'manifest must be a regular file'
 [[ -d "$pool_dir"  && ! -L "$pool_dir"  ]] || fail 'pool-dir must be a real directory'
 [[ ! -e "$output_dir" && ! -L "$output_dir" ]] || fail 'output-dir must be a new path'
-[[ "$metadata_epoch" =~ ^[1-9][0-9]*$ ]] || fail 'metadata-epoch must be a positive integer'
+[[ "$publication_epoch" =~ ^[1-9][0-9]*$ ]] || fail 'publication-epoch must be a positive integer'
 
 manifest_dir=$(unset CDPATH; cd -- "$(dirname -- "$manifest")" && pwd -P)
 manifest_name=$(basename -- "$manifest")
 
 args=(--manifest "/manifest/$manifest_name" --project "$project" --pool-dir /pool
-      --output-dir /out/archive --metadata-epoch "$metadata_epoch")
+      --output-dir /out/archive --publication-epoch "$publication_epoch")
 [[ -n "$component" ]] && args+=(--component "$component")
 
 if [[ "${AR_RENDER_LOCAL:-}" == 1 ]]; then
   exec python3 "$renderer" --manifest "$manifest" --project "$project" \
     --pool-dir "$pool_dir" --output-dir "$output_dir" \
-    --metadata-epoch "$metadata_epoch" ${component:+--component "$component"}
+    --publication-epoch "$publication_epoch" ${component:+--component "$component"}
 fi
 
 command -v docker >/dev/null || fail 'Docker is required for the pinned renderer'
@@ -69,8 +69,8 @@ parent=$(unset CDPATH; cd -- "$parent_raw" && pwd -P) \
 output_dir="$parent/$(basename -- "$output_dir")"
 [[ ! -e "$output_dir" && ! -L "$output_dir" ]] || fail 'output-dir must be a new path'
 
-staging="$parent/.render.$$"
-mkdir -p "$staging"
+staging=$(mktemp -d "$parent/.render.XXXXXX") \
+  || fail "cannot create renderer staging directory below $parent"
 trap 'rm -rf -- "$staging"' EXIT
 
 docker run --rm --network none --read-only \

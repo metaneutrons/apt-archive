@@ -120,10 +120,24 @@ raw = subprocess.run(
     ["gh", "release", "view", os.environ["TAG"], "-R", os.environ["REPO"],
      "--json", "assets"],
     capture_output=True, text=True, check=True).stdout
-for asset in json.loads(raw)["assets"]:
-    if asset.get("name") == os.environ["NAME"]:
-        print((asset.get("digest") or "").removeprefix("sha256:"))
-        break
+payload = json.loads(raw)
+assets = payload.get("assets")
+if not isinstance(assets, list):
+    raise SystemExit("release response carries no assets array")
+matches = [asset for asset in assets
+           if isinstance(asset, dict) and asset.get("name") == os.environ["NAME"]]
+if len(matches) != 1:
+    raise SystemExit(f"release response names the selected asset {len(matches)} times")
+asset = matches[0]
+if "digest" not in asset:
+    raise SystemExit("selected asset carries no digest field")
+digest = asset["digest"]
+if digest is None or digest == "":
+    print("")
+elif isinstance(digest, str) and digest.startswith("sha256:"):
+    print(digest.removeprefix("sha256:"))
+else:
+    raise SystemExit(f"selected asset carries an unsupported digest: {digest!r}")
 PY
 ) || fail "cannot read the API digest for $name"
   if [[ -n "$want" ]]; then
@@ -131,10 +145,12 @@ PY
     [[ "$want" == "$have" ]] || fail "$name does not match the digest the API reports"
   fi
 
-  gh attestation verify "$target" --repo "$source_repo" \
-    --deny-self-hosted-runners >/dev/null 2>&1 \
-    || fail "no valid build attestation for $name from $source_repo; \
-the source project must run actions/attest-build-provenance before it can be published"
+  if ! attestation_output=$(gh attestation verify "$target" --repo "$source_repo" \
+      --deny-self-hosted-runners 2>&1); then
+    printf '%s\n' "$attestation_output" >&2
+    fail "attestation verification failed for $name from $source_repo; \
+see the gh diagnostic above"
+  fi
 
   printf '  ok %s  %s %s %s\n' "$name" "$package" "$version" "$arch"
 done < "$work/chosen"

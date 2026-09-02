@@ -35,8 +35,8 @@ for name in fingerprint signing_subkey; do
   [[ "$value" =~ ^[0-9A-Fa-f]{40}$ ]] || \
     fail "--${name//_/-} must be a full 40-hex fingerprint, got '${value}'"
 done
-fingerprint=${fingerprint^^}
-signing_subkey=${signing_subkey^^}
+fingerprint=$(printf '%s' "$fingerprint" | LC_ALL=C tr '[:lower:]' '[:upper:]')
+signing_subkey=$(printf '%s' "$signing_subkey" | LC_ALL=C tr '[:lower:]' '[:upper:]')
 
 # Genau ein aktiver Primaerschluessel, und es muss der erwartete sein.
 # Die Regex nutzt `+` statt eines Intervalls: mawk kennt {n} nicht, und Debian

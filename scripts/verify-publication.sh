@@ -3,6 +3,7 @@
 #
 #   verify-publication.sh --manifest domains/<host>/manifest.toml \
 #                         --project <name> --archive-dir <lokale wurzel> \
+#                         --publication-epoch <epoch> \
 #                         [--base-url <uebersteuerung>]
 #
 # Geprueft wird, was ein Client tatsaechlich bekommt, nicht was hochgeladen
@@ -27,25 +28,33 @@ fail() { printf '::error::AR160 %s\n' "$*" >&2; exit 1; }
 opt_value() { [[ $# -ge 2 && -n "$2" ]] || fail "$1 requires a value"; }
 step() { printf '  %s\n' "$*"; }
 
-manifest=''; project=''; archive_dir=''; base_override=''
+manifest=''; project=''; archive_dir=''; publication_epoch=''; base_override=''
 while (($#)); do
   case "$1" in
     --manifest)    opt_value "$@"; manifest=$2; shift 2 ;;
     --project)     opt_value "$@"; project=$2; shift 2 ;;
     --archive-dir) opt_value "$@"; archive_dir=$2; shift 2 ;;
+    --publication-epoch) opt_value "$@"; publication_epoch=$2; shift 2 ;;
     --base-url)    opt_value "$@"; base_override=$2; shift 2 ;;
     *) fail "unknown argument: $1" ;;
   esac
 done
-for name in manifest project archive_dir; do
+for name in manifest project archive_dir publication_epoch; do
   [[ -n "${!name}" ]] || fail "--${name//_/-} is required"
 done
-for command in curl gpgv python3 shasum; do
+for command in curl gpg gpgv gzip python3 shasum; do
   command -v "$command" >/dev/null || fail "required command is missing: $command"
 done
 [[ -f "$manifest"    && ! -L "$manifest"    ]] || fail 'manifest must be a regular file'
 [[ -d "$archive_dir" && ! -L "$archive_dir" ]] || fail 'archive-dir must be a real directory'
+[[ "$publication_epoch" =~ ^[1-9][0-9]*$ ]] \
+  || fail 'publication-epoch must be a positive integer'
 archive_dir=$(unset CDPATH; cd -- "$archive_dir" && pwd -P)
+
+script_root=$(unset CDPATH; cd -- "$(dirname -- "$0")" && pwd -P)
+time_validator="$script_root/release_time.py"
+[[ -f "$time_validator" && ! -L "$time_validator" ]] \
+  || fail 'Release time validator is missing or unsafe'
 
 read -r base_url prefix suite keyring_package architectures < <(
   MANIFEST="$manifest" PROJECT="$project" python3 - <<'PY'
@@ -76,20 +85,37 @@ get() {  # $1 = Pfad relativ zur Basis, $2 = Ziel, $3 = Groessengrenze in Bytes
 }
 
 step "1  Keyring"
-get "${keyring_package}.gpg" "$work/keyring.gpg" 1048576
-subkeys=$(gpg --no-options --batch --with-colons --show-keys "$work/keyring.gpg" 2>/dev/null |
-            grep -c '^sub' || true)
+get "${keyring_package}.pgp" "$work/keyring.pgp" 1048576
+if ! subkeys=$(gpg --no-options --batch --with-colons \
+               --show-keys "$work/keyring.pgp" 2>/dev/null |
+                 awk -F: '$1 == "sub" { count += 1 } END { print count + 0 }'); then
+  fail 'cannot inspect the published keyring'
+fi
 [[ "$subkeys" == 1 ]] || fail "the published keyring carries $subkeys subkeys, expected exactly 1"
 step "    genau ein Subkey, wie vorgesehen"
 
 step "2  InRelease und Signatur"
 inrelease="${prefix}/dists/${suite}/InRelease"
 get "$inrelease" "$work/InRelease" 4194304
-gpgv --keyring "$work/keyring.gpg" "$work/InRelease" >/dev/null 2>&1 \
+status=$(gpgv --keyring "$work/keyring.pgp" --status-fd 1 \
+           "$work/InRelease" 2>/dev/null) \
   || fail 'gpgv rejected the published InRelease against the published keyring'
-signer=$(gpgv --keyring "$work/keyring.gpg" --status-fd 1 "$work/InRelease" 2>/dev/null |
-           awk '/VALIDSIG/{print $3}')
-step "    gpgv akzeptiert, signiert von ${signer}"
+signer=$(printf '%s\n' "$status" | awk '$2 == "VALIDSIG" {print $3}')
+signature_epoch=$(printf '%s\n' "$status" | awk '$2 == "VALIDSIG" {print $5}')
+[[ "$signature_epoch" == "$publication_epoch" ]] \
+  || fail "published signature time $signature_epoch does not equal publication epoch $publication_epoch"
+# gpgv 2.5 verifiziert eine Clearsignatur, schreibt deren Klartext mit
+# --output aber nicht portabel aus. Deshalb getrennt mit demselben isolierten
+# Keyring extrahieren; die Vertrauensentscheidung oben bleibt bei gpgv.
+install -d -m 0700 "$work/gnupg"
+gpg --no-options --batch --homedir "$work/gnupg" --no-default-keyring \
+  --keyring "$work/keyring.pgp" --output "$work/Release" \
+  --decrypt "$work/InRelease" >/dev/null 2>&1 \
+  || fail 'cannot extract the signed Release from the published InRelease'
+python3 "$time_validator" --manifest "$manifest" --release "$work/Release" \
+  --publication-epoch "$publication_epoch" \
+  || fail 'published Release time validation failed'
+step "    gpgv akzeptiert, signiert von ${signer}, Epoche ${signature_epoch}"
 
 step "3  Byteweiser Abgleich mit dem lokalen Baum"
 local_inrelease="$archive_dir/dists/${suite}/InRelease"
@@ -150,7 +176,12 @@ PY
   step "    ${arch}: by-hash/SHA512 identisch"
 
   if [[ -z "$first_deb" ]]; then
-    first_deb=$(gzip -dc "$work/Packages.gz" | awk '/^Filename: /{print $2; exit}')
+    # awk liest absichtlich bis EOF. Ein fruehes `exit` schliesst die Pipe,
+    # laesst gzip bei grossen Indexen mit SIGPIPE 141 sterben und beendet unter
+    # pipefail die gesamte Nachkontrolle ohne unsere Fehlermeldung.
+    first_deb=$(gzip -dc "$work/Packages.gz" |
+      awk '$1 == "Filename:" && first == "" { first = $2 } END { print first }') \
+      || fail "cannot inspect $rel for a package filename"
   fi
 done
 
