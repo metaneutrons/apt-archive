@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  # Kein Pfadfilter auf pull_request: der Aggregatjob unten ist der
+  # Pflichtcheck, und ein gefilterter Pflichtworkflow laesst jeden nicht
+  # passenden Pull Request dauerhaft in "Expected" haengen.
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Shell, Python and the contract suites
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Every checked-in shell program is one lint boundary
+        run: |
+          set -euo pipefail
+          find scripts tests -type f -name '*.sh' -print0 | xargs -0 shellcheck -S warning
+          find scripts tests -type f -name '*.sh' -print0 | xargs -0 -n 1 bash -n
+
+      # tomllib braucht 3.11; ubuntu-24.04 liefert 3.12.
+      - name: Python parses
+        run: |
+          set -euo pipefail
+          python3 --version
+          find scripts tests -type f -name '*.py' -print0 |
+            xargs -0 -n 1 python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())'
+
+      - name: The manifests parse and carry what the scripts read
+        run: |
+          set -euo pipefail
+          for manifest in domains/*/manifest.toml; do
+            MANIFEST="$manifest" python3 - <<'PY'
+          import os, tomllib
+          path = os.environ["MANIFEST"]
+          with open(path, "rb") as handle:
+              data = tomllib.load(handle)
+          for section, keys in (
+              ("domain", ("host", "base_url", "origin", "keyring_package", "keyring_file")),
+              ("signing", ("primary_fingerprint", "signing_subkey")),
+              ("publication", ("r2_bucket", "r2_account_id")),
+              ("release", ("suite", "codename", "components", "architectures",
+                           "acquire_by_hash", "valid_until_days")),
+          ):
+              for key in keys:
+                  if key not in data.get(section, {}):
+                      raise SystemExit(f"{path}: [{section}] {key} is missing")
+          projects = data.get("projects") or []
+          if not projects:
+              raise SystemExit(f"{path}: no project declared")
+          for project in projects:
+              for key in ("name", "prefix", "source_repo", "packages", "keep_versions"):
+                  if key not in project:
+                      raise SystemExit(f"{path}: project {project.get('name')!r} lacks {key}")
+          print(f"{path}: {len(projects)} project(s)")
+          PY
+          done
+
+      - name: Renderer contract
+        run: bash tests/test_render_archive.sh
+
+      - name: Signing contract
+        run: bash tests/test_signing.sh
+
+      - name: Publication contract
+        run: bash tests/test_publication.sh
+
+  container:
+    name: The pinned renderer container
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Dieser Pfad liess sich auf dem Entwicklungsrechner nicht pruefen: das
+      # dortige Docker unterstuetzt keine Verzeichnis-Mounts frisch angelegter
+      # Pfade. Hier laeuft er echt, und das Ergebnis muss byteidentisch zum
+      # lokalen Lauf sein, sonst ist der Determinismus keiner.
+      - name: Container and local path must agree byte for byte
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          mkdir -p "$work/pool"
+          python3 tests/make_deb.py --out "$work/pool/demo_1.0.0_amd64.deb" \
+            --package demo --version 1.0.0 --architecture amd64
+          python3 tests/make_deb.py --out "$work/pool/demo-doc_1.0.0_all.deb" \
+            --package demo-doc --version 1.0.0 --architecture all --source demo
+          sed -e 's/^host = .*/host = "deb.example.invalid"/' \
+              -e 's/^base_url = .*/base_url = "https:\/\/deb.example.invalid"/' \
+              domains/metaneutrons.cc/manifest.toml > "$work/m.toml"
+          python3 - "$work" <<'PY'
+          import pathlib, sys, re
+          p = pathlib.Path(sys.argv[1]) / "m.toml"
+          t = p.read_text()
+          # Genau ein Projekt, dessen Pakete zu den Testdateien passen.
+          t = re.split(r"^\[\[projects\]\]", t, flags=re.M)[0]
+          t += ('[[projects]]\nname = "demo"\nprefix = "/demo"\n'
+                'source_repo = "a/b"\npackages = ["demo", "demo-doc"]\n'
+                'keep_versions = 5\n')
+          p.write_text(t)
+          PY
+          ./scripts/render-archive.sh --manifest "$work/m.toml" --project demo \
+            --pool-dir "$work/pool" --output-dir "$work/container" \
+            --metadata-epoch 1700000000
+          AR_RENDER_LOCAL=1 ./scripts/render-archive.sh --manifest "$work/m.toml" \
+            --project demo --pool-dir "$work/pool" --output-dir "$work/local" \
+            --metadata-epoch 1700000000
+          diff -r "$work/container" "$work/local"
+          echo 'container and local output are identical'
+
+  ci-success:
+    name: CI success
+    if: always()
+    needs: [checks, container]
+    runs-on: ubuntu-24.04
+    steps:
+      # Ein `needs` allein genuegt nicht: bei `if: always()` laeuft dieser Job
+      # auch, wenn ein vorangehender fehlschlug. Ohne die Pruefung waere der
+      # Pflichtcheck immer gruen.
+      - name: Every preceding job must have succeeded or been skipped
+        run: |
+          set -euo pipefail
+          printf '%s\n' '${{ toJSON(needs) }}' |
+            jq -e 'all(.[]; .result == "success" or .result == "skipped")'
