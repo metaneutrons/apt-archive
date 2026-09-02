@@ -12,6 +12,15 @@ das gesamte Archiv. Deshalb laden Projekt-Repositories gar nicht hoch: sie
 hängen ihre `.deb` mit Attestation an ihr GitHub-Release, und dieses Repository
 holt sie, prüft die Attestation, rendert die Metadaten und veröffentlicht.
 
+Ein Bucket je Archiv-Domain, benannt nach ihr, und die Custom Domain hängt
+genau daran. Zwei Hostnamen auf denselben Objekten wären für `apt` zwei
+Repositories mit gleichem Inhalt, und ein Token für einen gemeinsamen Bucket
+wäre ein Token für beide Domains.
+
+Damit die Beschränkung auf einen Bucket wirkt, muss das Tokenpaar in einer
+Environment auch genau auf diesen einen Bucket ausgestellt sein. Ein
+kontoweites Paar erfüllt die Signatur der Prüfung und nicht ihren Zweck.
+
 ## Was hier nicht liegt
 
 Der Certify-only-Primärschlüssel. Er wird offline erzeugt und bleibt es; sein
@@ -82,9 +91,12 @@ signierenden Subkey melden und nicht den Primärschlüssel.
 Nichts ist veröffentlicht. Die Kette steht vollständig und ist durch die
 Vertragssuiten abgedeckt, es fehlen die Voraussetzungen auf beiden Seiten.
 
-Diesseits fehlt das Schlüsselmaterial. `primary_fingerprint`, `signing_subkey`
-und `r2_bucket` stehen in beiden Manifesten auf `TBD`; `sign-archive.sh` und
-`publication_plan.py` brechen darauf ab, statt einen Platzhalter zu signieren.
+Diesseits fehlt das Schlüsselmaterial. Die Buckets stehen, `deb.metaneutrons.cc`
+liegt auf `deb-metaneutrons-cc` und `deb.snapdog.cc` auf `deb-snapdog-cc`.
+`primary_fingerprint` und `signing_subkey` stehen in beiden Manifesten weiter
+auf `TBD`, und `sign-archive.sh` bricht darauf ab, statt einen Platzhalter zu
+signieren. Die vier Environment-Secrets sind in keiner der beiden Environments
+gesetzt.
 
 Jenseits fehlt bei jedem einzelnen Projekt eine Voraussetzung. Stand
 2. September 2026:
