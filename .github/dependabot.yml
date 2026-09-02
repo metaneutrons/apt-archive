@@ -1,0 +1,31 @@
+# Die Gruppierung ist nach Aktualisierungsart getrennt. Eine Gruppe
+# `patterns: ['*']` über alle Arten bündelt Breaking Changes mit harmlosen
+# Anhebungen, und einer reißt dann alle mit. Minor und Patch bleiben gebündelt,
+# Major kommt einzeln.
+#
+# Es gibt hier bewusst keinen pip-Eintrag: der Renderer benutzt ausschließlich
+# die Standardbibliothek, es gibt also keine Python-Abhängigkeiten.
+#
+# NICHT abgedeckt: das per Digest gepinnte Container-Image in
+# scripts/render-archive.sh. Dependabot verfolgt Image-Digests in einem
+# Dockerfile, nicht in einem Shell-Skript. Dieser Pin ist von Hand zu
+# aktualisieren; er steht dort mit Begründung.
+
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '05:15'
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
+    groups:
+      github-actions-minor-patch:
+        patterns: ['*']
+        update-types: [minor, patch]
