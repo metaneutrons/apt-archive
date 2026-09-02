@@ -10,7 +10,7 @@ scripts/render-archive.sh \
   --project aros-tools \
   --pool-dir /pfad/zu/allen/debs \
   --output-dir /pfad/zum/neuen/archiv \
-  --metadata-epoch 1700000000
+  --publication-epoch 1700000000
 ```
 
 Ergebnis unter `--output-dir`, dem Archivwurzelverzeichnis eines Projektpraefix,
@@ -57,16 +57,25 @@ Alles, was ein Archiv still beschaedigen wuerde:
 - ein Paketname, den das Projekt im Manifest nicht auffuehrt
 - eine Architektur, die die Domain nicht bedient
 - zwei Dateien mit derselben Identitaet aus Name, Version und Architektur
+- dieselbe Paketversion gleichzeitig als `Architecture: all` und nativ
+- unsichere `Version`-/`Source`-Werte oder berechnete Control-Felder wie
+  `Filename`, `Size`, `SHA256` und `SHA512` im Eingangspaket
+- Projektname oder Praefix, die keine sicheren einzeiligen Release-Felder sind
 - ein Manifest mit abgeschaltetem `acquire_by_hash`
 - ein bereits vorhandenes Ausgabeverzeichnis
 
 ## Determinismus
 
-Zwei Laeufe mit gleicher Eingabe und gleichem `--metadata-epoch` sind
-byteidentisch; die Testsuite prueft das. `render-archive.sh` fuehrt den Renderer
-in einem digest-gepinnten Container ohne Netz aus, weil die Bytes von
-`Packages.gz` sonst an der zlib-Version des Hosts haengen. `AR_RENDER_LOCAL=1`
-umgeht den Container.
+Zwei Laeufe mit gleicher Eingabe und gleicher `--publication-epoch` sind
+byteidentisch; die Testsuite prueft das. Eine spaetere Publikations-Epoche
+aendert nur `Date` und `Valid-Until` in `Release` und spaeter dessen Signaturen;
+Pool, Indexe und by-hash bleiben gleich. In einem echten Publish-Lauf erzeugt
+der geschuetzte Zieljob diese Epoche selbst unmittelbar vor dem Rendern. Sie
+kommt weder aus dem Commit noch aus einem Dispatch-Payload.
+
+`render-archive.sh` fuehrt den Renderer in einem digest-gepinnten Container ohne
+Netz aus, weil die Bytes von `Packages.gz` sonst an der zlib-Version des Hosts
+haengen. `AR_RENDER_LOCAL=1` umgeht den Container.
 
 ## Abholen
 
@@ -86,19 +95,21 @@ Workflow-Identitaet, nicht bloss an ein Konto, das ein Asset hochladen darf.
 `actions/attest-build-provenance` kann so nicht veroeffentlicht werden, und das
 ist gewollt.
 
-Am 2. September 2026 gilt das fuer `SnapDogRocks/snapdog`: 56 Releases, keine
+Am 2. September 2026 gilt das fuer `SnapDogRocks/snapdog`: 30 Releases, keine
 Attestierung. Das Abholen bricht dort ab und nennt, was fehlt.
 
 Entwuerfe und Prereleases werden uebersprungen; die Archive fuehren stabile
 Versionen, und ein Prerelease gehoerte in eine eigene Suite. `keep_versions` im
-Manifest begrenzt, wie viele Releases im Pool landen: ohne Grenze waechst er
-unbegrenzt, und ein Projekt mit 56 Releases und vier Paketen bedeutete 224
-Downloads je Lauf.
+Manifest begrenzt, wie viele Releases im Pool landen: ohne Grenze wuechse er
+mit jeder Veroeffentlichung weiter.
 
 `select_assets.py` trennt die Auswahl in zwei Stufen, beide reine Funktionen
-ueber JSON und damit ohne Netz testbar. `gh release list` kann keine Assets
-liefern, deshalb erst die Tags filtern und dann je gewaehltem Tag ein
-`gh release view`, nicht eines je Release, das je existierte.
+ueber JSON und damit ohne Netz testbar. Ein Lauf fragt die Release-Liste einmal
+ab, liest danach die Asset-Liste einmal je behaltenem Tag und liest fuer jedes
+tatsaechlich gewaehlte Asset dessen API-Digest noch einmal. Je gewaehltem Asset
+folgen ein Download und eine Attestierungspruefung. Die fruehe Tag-Auswahl
+verhindert Asset-Abfragen fuer alle historischen Releases; sie behauptet nicht,
+dass der spaetere Digest-Aufruf entfiele.
 
 ## Signatur
 
@@ -111,20 +122,30 @@ Signiert wird immer mit dem Subkey aus dem Manifest, gepinnt per abschliessendem
 Ausrufezeichen. Ohne das waehlt gpg bei mehreren Signing-Subkeys selbst einen
 aus, und der Export liefert alle statt des einen, der zu dieser Domain gehoert.
 
-Die Metadaten-Epoche darf nicht vor der Erzeugung des Subkeys liegen. gpg
-signiert sonst nicht und meldet nur "unbrauchbarer geheimer Schluessel"; das
-Skript lehnt es benannt ab. Folge: ein alter Baum laesst sich nach einer
-Rotation nicht mit seinem urspruenglichen `SOURCE_DATE_EPOCH` nachsignieren.
+Vor dem Schluesselimport prueft das Skript, dass `Date` genau der uebergebenen
+Publikations-Epoche entspricht, `Valid-Until` exakt die Frist aus dem Manifest
+abbildet und die Epoche hoechstens eine Stunde alt und nicht zukuenftig ist.
+Dieselbe Epoche steuert danach `gpg --faked-system-time`; die erzeugten
+Signaturen werden auf diese Zeit zurueckgeprueft.
+
+Die Publikations-Epoche darf ausserdem nicht vor der Erzeugung des Subkeys
+liegen. gpg signiert sonst nicht und meldet nur "unbrauchbarer geheimer
+Schluessel"; das Skript lehnt es benannt ab. Folge: ein alter Baum wird fuer
+eine Neusignatur mit frischer Publikations-Epoche neu gerendert.
 
 ## Veroeffentlichung
 
 ```
 scripts/publish-archive.sh --manifest domains/metaneutrons.cc/manifest.toml \
-  --project aros-tools --archive-dir <signierte wurzel> [--preflight]
+  --project aros-tools --archive-dir <signierte wurzel> \
+  --publication-epoch <epoch> [--preflight]
 ```
 
 Zugangsdaten kommen aus `R2_ACCESS_KEY_ID` und `R2_SECRET_ACCESS_KEY`, nie aus
 Argumenten. `--preflight` prueft Zugang, Bucket und Plan und schreibt nichts.
+Der Planer prueft die Publikationszeit erneut und bricht bei mehr als einer
+Stunde Alter, Zukunftswerten oder abweichenden Release-Feldern ab, bevor der
+erste Upload versucht wird.
 
 **Objekte zuerst, Metadaten zuletzt.** Vier Phasen in dieser Reihenfolge:
 Keyring, Pool, Indexe, dann `Release`, `Release.gpg` und `InRelease`. Umgekehrt
@@ -150,19 +171,21 @@ und ohne Zugangsdaten pruefbar bleibt.
 
 ```
 scripts/verify-publication.sh --manifest <manifest> --project <name> \
-  --archive-dir <lokale wurzel> [--base-url <uebersteuerung>]
+  --archive-dir <lokale wurzel> --publication-epoch <epoch> \
+  [--base-url <uebersteuerung>]
 ```
 
 Geprueft wird, was ein Client bekommt, nicht was hochgeladen wurde: Keyring
 laden, `InRelease` damit gegen `gpgv` halten, byteweise gegen die lokale Fassung
-vergleichen, je Architektur `Packages.gz` gegen die Summe aus `InRelease`
-pruefen, denselben Index unter seinem `by-hash/SHA512`-Pfad laden und
-vergleichen, und schliesslich den ersten `Filename`-Eintrag aufloesen und das
-Paket byteweise vergleichen.
+vergleichen, signierten Klartext extrahieren und Publikationszeit,
+`Valid-Until` und Signaturzeit pruefen, je Architektur `Packages.gz` gegen die
+Summe aus `InRelease` pruefen, denselben Index unter seinem
+`by-hash/SHA512`-Pfad laden und vergleichen, und schliesslich den ersten
+`Filename`-Eintrag aufloesen und das Paket byteweise vergleichen.
 
 ## Workflows
 
-`ci.yml` prueft Shell, Python, die Manifeste und die drei Vertragssuiten, und
+`ci.yml` prueft Shell, Python, die Manifeste und die fuenf Vertragssuiten, und
 laeuft in einem eigenen Job den **containergepinnten** Renderer gegen den
 lokalen Pfad: beide muessen byteidentisch sein. Dieser Pfad liess sich auf dem
 Entwicklungsrechner nicht pruefen, das dortige Docker mountet frisch angelegte
@@ -171,7 +194,12 @@ Verzeichnisse leer.
 `publish.yml` faehrt Abholen, Rendern, Signieren, Veroeffentlichen und
 Nachkontrolle. Kein Cron: GitHub schaltet geplante Workflows in oeffentlichen
 Repositories nach 60 Tagen ohne Commit ab, und dieses Repository ist commitarm.
-Der Anstoss kommt per `workflow_dispatch` oder `repository_dispatch`.
+Der Anstoss kommt per `workflow_dispatch` oder `repository_dispatch`. Beide
+Pfade benutzen ausschliesslich die im geschuetzten Publish-Job frisch erzeugte
+Publikations-Epoche; ein Aufrufer oder Waechter kann sie nicht vorgeben.
+Je Domain schreibt nur ein Lauf gleichzeitig. `queue: max` bewahrt bis zu 100
+weitere Anforderungen, damit ein neuer Dispatch keinen bereits wartenden Lauf
+eines anderen Projekts derselben Domain verdraengt.
 
 **Eine Environment je Domain**, `release-<host>`. Der Standard nennt eine
 einzige `release`; das gilt fuer ein Projektrepository. Hier gibt es zwei
@@ -186,20 +214,21 @@ ueber `env`, nie per Interpolation.
 
 ```
 bash tests/test_render_archive.sh
-```
-
-```
+bash tests/test_select_assets.sh
+bash tests/test_fetch_packages.sh
 bash tests/test_signing.sh
 bash tests/test_publication.sh
 ```
 
-Dreiundsiebzig Zusicherungen, kein Netz nach draussen, kein echtes
-Schluesselmaterial, kein `dpkg`. `tests/make_deb.py` baut echte `.deb`-Dateien
+177 Zusicherungen, kein Netz nach draussen, kein echtes Schluesselmaterial und
+kein `dpkg`. `tests/make_deb.py` baut echte `.deb`-Dateien
 mit den Bordmitteln von Python, so dass die Tests gegen Paketbytes laufen statt
 gegen eine Attrappe. Die Signaturtests erzeugen einen Wegwerfschluessel in der
 vorgeschriebenen Form, und die Nachkontrolle laeuft gegen einen lokalen Server,
 der den Baum so ausliefert wie der Bucket.
 
-**Was nicht getestet ist:** `publish-archive.sh` selbst. Der Upload braucht
-R2-Zugangsdaten, die es nur als GitHub-Secret gibt. Geprueft sind seine Syntax,
-shellcheck und der Plan, den er ausfuehrt; die Ausfuehrung ist es nicht.
+Der Ablehnungspfad von `publish-archive.sh` laeuft mit einer kryptografisch
+gueltigen, aber veralteten Fassung und einem AWS-Stub wirklich durch; die Probe
+belegt null `put-object`-Versuche. Nicht lokal getestet ist ein erfolgreicher
+Upload aller Phasen gegen echtes R2, weil dessen Zugangsdaten ausschließlich
+als GitHub-Secret vorliegen.

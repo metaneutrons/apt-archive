@@ -67,9 +67,11 @@ eingefroren.
 ihrer Prüfsumme, und ein zwischengespeicherter alter Index kann nicht mehr
 gegen ein neues `InRelease` laufen.
 
-`Valid-Until` steht auf 180 Tagen und wird bei jedem Release neu gesetzt. Kein
-Cron: GitHub deaktiviert geplante Workflows in öffentlichen Repositories nach
-60 Tagen ohne Commit, und nur Commits zählen als Aktivität.
+`Date` und `Valid-Until` werden bei jeder Veröffentlichung einschließlich einer
+Neusignatur aus einer unmittelbar zuvor intern erzeugten Publikationszeit neu
+gesetzt; `Valid-Until` liegt exakt 180 Tage danach. Kein Cron: GitHub deaktiviert
+geplante Workflows in öffentlichen Repositories nach 60 Tagen ohne Commit, und
+nur Commits zählen als Aktivität.
 
 ## Einbinden
 
@@ -86,20 +88,28 @@ Ein Keyring-Paket je Domain. Beide Subkey-Fingerprints sind zusammen mit dem
 Primärfingerprint veröffentlicht, weil `gpgv` und `sqv` im Fehlerfall den
 signierenden Subkey melden und nicht den Primärschlüssel.
 
+Die binäre OpenPGP-Keyring-Datei wird im Archiv und durch das Keyring-Paket
+unter demselben `.pgp`-Namen geführt. `Signed-By` verweist damit ohne
+Umbenennung genau auf die vom Paket installierte Datei.
+
+Die `packages`-Liste eines Projekts ist vollständig: Jeder genannte Paketname
+muss in den betrachteten stabilen Releases mindestens einmal als passendes
+`.deb` vorkommen. Optionale Pakete werden nicht stillschweigend angenommen;
+falls sie später gebraucht werden, erhalten sie ein eigenes Manifestfeld.
+
 ## Stand
 
-Nichts ist veröffentlicht. Die Kette steht vollständig und ist durch die
-Vertragssuiten abgedeckt, es fehlen die Voraussetzungen auf beiden Seiten.
+Nichts ist veröffentlicht. Die Kette steht vollständig, ist mit Buckets,
+Schlüsselmaterial und getrennten Domain-Credentials ausgestattet und durch die
+Vertragssuiten abgedeckt. `deb.metaneutrons.cc` liegt auf
+`deb-metaneutrons-cc`, `deb.snapdog.cc` auf `deb-snapdog-cc`; beide Manifeste
+tragen die geprüften öffentlichen Fingerprints. Die geschützten Environments
+`release-metaneutrons.cc` und `release-snapdog.cc` enthalten jeweils die vier
+vom Workflow benötigten Secrets. Der geheime Primärschlüssel bleibt im Tresor
+und ist in keinem CI-Bundle enthalten.
 
-Diesseits fehlt das Schlüsselmaterial. Die Buckets stehen, `deb.metaneutrons.cc`
-liegt auf `deb-metaneutrons-cc` und `deb.snapdog.cc` auf `deb-snapdog-cc`.
-`primary_fingerprint` und `signing_subkey` stehen in beiden Manifesten weiter
-auf `TBD`, und `sign-archive.sh` bricht darauf ab, statt einen Platzhalter zu
-signieren. Die vier Environment-Secrets sind in keiner der beiden Environments
-gesetzt.
-
-Jenseits fehlt bei jedem einzelnen Projekt eine Voraussetzung. Stand
-2. September 2026:
+Für die erste Veröffentlichung fehlen noch Voraussetzungen in den
+Quellprojekten. Stand 2. September 2026:
 
 | Projekt | Releases | `.deb` im Release | Attestierung |
 | --- | --- | --- | --- |
@@ -115,3 +125,10 @@ Attestierungs-API antwortet für den SHA256 von `snapdog_0.27.1-1_amd64.deb`
 mit 404. `fetch-packages.sh` bricht darauf ab und warnt nicht, und das ist
 Absicht: ein Asset beweist nur, dass ein Konto es hochladen durfte, eine
 Attestierung bindet es an eine Workflow-Identität.
+
+## Lizenz
+
+Copyright © 2026 Fabian Schmieder.
+
+Dieses Repository steht unter der GNU General Public License Version 3; siehe
+[`LICENSE`](LICENSE).

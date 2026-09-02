@@ -19,6 +19,11 @@ Kein KI-Attributions-Trailer in Commits, PR-Bodys oder Autorenfeldern.
 brew install lefthook && lefthook install
 ```
 
+Die Installation richtet `commit-msg`, `pre-commit` und `pre-push` ein. Der
+Pre-Commit-Hook kompiliert nichts; die vollstaendigen Vertragssuiten bleiben in
+CI. `git commit --no-verify` ist kein Freigabeweg: `Commit-Hygiene` prueft
+PR-Titel, PR-Body und Commit-Metadaten serverseitig erneut.
+
 ## Vor jeder Änderung an der Veröffentlichung
 
 Dieses Repository erzeugt signierte Paketarchive. Zwei Regeln gelten ohne

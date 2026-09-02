@@ -7,8 +7,8 @@ testable without a network.
 `--stage tags` reads `gh release list --json tagName,isDraft,isPrerelease,publishedAt`
 and prints the tags worth inspecting. `gh release list` cannot return assets, so
 `--stage assets` then reads an array of `gh release view --json tagName,assets`
-results for exactly those tags. Filtering first keeps it at one API call per
-kept release instead of one per release that ever existed.
+results for exactly those tags. Filtering first limits asset discovery to one
+API call per kept release instead of one per release that ever existed.
 
 Rules, all deliberate:
 
@@ -20,6 +20,9 @@ Rules, all deliberate:
 * An asset counts only when its name parses as `<package>_<version>_<arch>.deb`
   and the package is one the manifest declares. A project that renames its
   binary must say so in the manifest first.
+* Every package declared by the project must occur at least once in the kept
+  release window. The declaration is a completeness contract, not an allowlist
+  that silently makes missing binaries optional.
 """
 
 from __future__ import annotations
@@ -43,24 +46,33 @@ def fail(message: str) -> NoReturn:
 
 
 def pick_tags(releases: list, keep: int) -> list[str]:
-    stable = [
-        r for r in releases
-        if isinstance(r, dict) and not r.get("isDraft") and not r.get("isPrerelease")
-    ]
+    stable: list[dict] = []
+    for index, release in enumerate(releases):
+        if not isinstance(release, dict):
+            fail(f"release {index} is not an object")
+        for field in ("isDraft", "isPrerelease"):
+            if not isinstance(release.get(field), bool):
+                fail(f"release {index} carries no boolean {field}")
+        tag = release.get("tagName")
+        if not isinstance(tag, str) or not tag:
+            fail(f"release {index} carries no tag name")
+        if "/" in tag or tag.startswith("-"):
+            fail(f"unsafe tag name {tag!r}")
+        if "publishedAt" not in release:
+            fail(f"release {tag!r} carries no publishedAt field")
+        if release["isDraft"] or release["isPrerelease"]:
+            continue
+        published = release.get("publishedAt")
+        if not isinstance(published, str) or not published:
+            fail(f"stable release {tag!r} carries no publication date")
+        stable.append(release)
     if not stable:
         fail("the project has no stable release")
     # `gh release list` returns newest first, but the order is not part of its
-    # contract, so sort explicitly on the publication date.
-    stable.sort(key=lambda r: str(r.get("publishedAt") or ""), reverse=True)
-    tags: list[str] = []
-    for release in stable[:keep]:
-        tag = release.get("tagName")
-        if not isinstance(tag, str) or not tag:
-            fail("a release carries no tag name")
-        if "/" in tag or tag.startswith("-"):
-            fail(f"unsafe tag name {tag!r}")
-        tags.append(tag)
-    return tags
+    # contract. A tag-name tie-breaker makes equal timestamps deterministic.
+    stable.sort(key=lambda release: release["tagName"])
+    stable.sort(key=lambda release: release["publishedAt"], reverse=True)
+    return [release["tagName"] for release in stable[:keep]]
 
 
 def select(releases: list, packages: set[str], architectures: set[str]) -> list[dict]:
@@ -71,9 +83,14 @@ def select(releases: list, packages: set[str], architectures: set[str]) -> list[
         tag = release.get("tagName")
         if not isinstance(tag, str) or not tag:
             fail("a release carries no tag name")
-        for asset in release.get("assets") or []:
-            name = asset.get("name") if isinstance(asset, dict) else None
-            if not isinstance(name, str) or not name.endswith(".deb"):
+        assets = release.get("assets")
+        if not isinstance(assets, list):
+            fail(f"{tag}: the release carries no assets array")
+        for asset in assets:
+            if not isinstance(asset, dict) or not isinstance(asset.get("name"), str):
+                fail(f"{tag}: an asset carries no name")
+            name = asset["name"]
+            if not name.endswith(".deb"):
                 continue
             match = ASSET.fullmatch(name)
             if match is None:
@@ -105,6 +122,13 @@ def select(releases: list, packages: set[str], architectures: set[str]) -> list[
                 "one identity cannot come from two releases"
             )
         seen[identity] = entry["tag"]
+    present = {entry["package"] for entry in chosen}
+    missing = packages - present
+    if missing:
+        fail(
+            "the kept stable releases carry no .deb for required package(s): "
+            f"{', '.join(sorted(missing))}"
+        )
     return chosen
 
 

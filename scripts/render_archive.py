@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import bz2
-import datetime as dt
 import gzip
 import hashlib
 import io
@@ -38,6 +37,8 @@ import tomllib
 from pathlib import Path
 from typing import BinaryIO, NoReturn
 
+from release_time import MIN_VALID_SECONDS, rfc2822
+
 AR_MAGIC = b"!<arch>\n"
 CONTROL_MEMBER = re.compile(r"^(?:\./)?control$")
 
@@ -47,6 +48,8 @@ DEBIAN_VERSION = re.compile(r"^(?:[0-9]+:)?[0-9][A-Za-z0-9.+~:-]*$")
 ARCHITECTURE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 SUITE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 COMPONENT = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+PROJECT_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
+PREFIX = re.compile(r"^/[a-z0-9][a-z0-9._/-]*[a-z0-9]$")
 HEX40 = re.compile(r"^[0-9A-Fa-f]{40}$")
 # Alles, was in eine Release-Zeile geschrieben wird. Ein Zeilenumbruch
 # darin haengt der Datei eine beliebige weitere Zeile an.
@@ -71,9 +74,7 @@ RELEASE_HASHES = (("SHA256", "sha256"), ("SHA512", "sha512"))
 # Packages.xz is deliberately absent.  Its determinism depends on the liblzma
 # build, and the saving on an index of a few kilobytes does not pay for that.
 INDEX_NAMES = ("Packages", "Packages.gz")
-
-MIN_VALID_SECONDS = 7 * 24 * 3600
-
+COMPUTED_CONTROL_FIELDS = frozenset(("filename", "size", "sha256", "sha512"))
 
 def fail(message: str) -> NoReturn:
     raise SystemExit(f"AR100 {message}")
@@ -278,6 +279,9 @@ class Domain:
                     )
             return value
 
+        if not RELEASE_FIELD.fullmatch(project_name) or not PROJECT_NAME.fullmatch(project_name):
+            fail(f"{manifest_path}: project name must be one safe printable field")
+
         self.origin = need("domain", "origin", str)
         self.host = need("domain", "host", str)
         self.suite = need("release", "suite", str)
@@ -330,8 +334,14 @@ class Domain:
         if len(set(self.packages)) != len(self.packages):
             fail(f"{manifest_path}: project {project_name!r} repeats a package name")
 
-        prefix = str(project.get("prefix", ""))
-        if not prefix.startswith("/") or prefix.endswith("/") or ".." in prefix:
+        prefix = project.get("prefix")
+        if (
+            not isinstance(prefix, str)
+            or not RELEASE_FIELD.fullmatch(prefix)
+            or not PREFIX.fullmatch(prefix)
+            or "//" in prefix
+            or any(part in (".", "..") for part in prefix.split("/"))
+        ):
             fail(f"{manifest_path}: project {project_name!r} has an unsafe prefix {prefix!r}")
         self.prefix = prefix
 
@@ -382,6 +392,15 @@ class Binary:
         self.source_path = path
         fields = parse_fields(control_text(path), path.name)
         self.fields = fields
+
+        computed = sorted(
+            name for name in fields if name.casefold() in COMPUTED_CONTROL_FIELDS
+        )
+        if computed:
+            fail(
+                f"{path.name} supplies archive-computed control fields: "
+                f"{', '.join(computed)}"
+            )
 
         for required in ("Package", "Version", "Architecture"):
             if required not in fields:
@@ -443,6 +462,17 @@ def collect(pool_dir: Path, domain: Domain, component: str) -> list[Binary]:
             )
         seen[binary.identity] = path.name
         binaries.append(binary)
+    portable = {(binary.package, binary.version) for binary in binaries
+                if binary.architecture == "all"}
+    native = {(binary.package, binary.version) for binary in binaries
+              if binary.architecture != "all"}
+    conflicts = sorted(portable & native)
+    if conflicts:
+        package, version = conflicts[0]
+        fail(
+            f"{package} {version} is provided both as Architecture: all and "
+            "as a native package"
+        )
     return binaries
 
 
@@ -481,12 +511,6 @@ def write_by_hash(index: Path, directory: Path) -> None:
         os.chmod(target, 0o644)
 
 
-def rfc2822(epoch: int) -> str:
-    return dt.datetime.fromtimestamp(epoch, tz=dt.timezone.utc).strftime(
-        "%a, %d %b %Y %H:%M:%S +0000"
-    )
-
-
 def render(
     domain: Domain,
     binaries: list[Binary],
@@ -519,9 +543,8 @@ def render(
             write_by_hash(binary_dir / name, binary_dir)
 
     indexes = sorted(
-        path
-        for path in dists.rglob("*")
-        if path.is_file() and "/by-hash/" not in path.as_posix()
+        path for path in dists.rglob("*")
+        if path.is_file() and "by-hash" not in path.relative_to(dists).parts
     )
     header = [
         f"Origin: {domain.origin}",
@@ -556,14 +579,14 @@ def main() -> None:
                         help="flat directory holding every .deb to publish")
     parser.add_argument("--output-dir", type=Path, required=True,
                         help="must not exist; becomes the archive root")
-    parser.add_argument("--metadata-epoch", type=int, required=True,
-                        help="SOURCE_DATE_EPOCH; fixes Date and Valid-Until")
+    parser.add_argument("--publication-epoch", type=int, required=True,
+                        help="publication time used for Date and Valid-Until")
     parser.add_argument("--component", default=None,
                         help="defaults to the manifest's single component")
     args = parser.parse_args()
 
-    if args.metadata_epoch <= 0:
-        fail("metadata-epoch must be a positive integer")
+    if args.publication_epoch <= 0:
+        fail("publication-epoch must be a positive integer")
     if not args.manifest.is_file() or args.manifest.is_symlink():
         fail(f"manifest must be a regular file: {args.manifest}")
     if not args.pool_dir.is_dir() or args.pool_dir.is_symlink():
@@ -587,7 +610,7 @@ def main() -> None:
 
     args.output_dir.parent.mkdir(parents=True, exist_ok=True)
     args.output_dir.mkdir(mode=0o755)
-    render(domain, binaries, args.output_dir, component, args.metadata_epoch)
+    render(domain, binaries, args.output_dir, component, args.publication_epoch)
 
     served = sorted({b.package for b in binaries})
     print(

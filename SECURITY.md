@@ -8,6 +8,8 @@ Befunde, die eine Veröffentlichung unter falscher Identität, eine Umgehung der
 Signaturprüfung oder ein Zurückrollen auf einen älteren Archivzustand
 ermöglichen.
 
-Der Signaturschlüssel liegt nicht in diesem Repository. Der
-Certify-only-Primärschlüssel ist offline, die Signing-Subkeys liegen auf einem
-Hardware-Token.
+Geheimes Schlüsselmaterial liegt nicht in diesem Repository. Der
+Certify-only-Primärschlüssel bleibt offline im Tresor. Die geschützten
+GitHub-Environments enthalten je Domain nur ein passphrasengeschütztes
+Secret-Subkey-Bundle; der Workflow lehnt einen enthaltenen geheimen
+Primärschlüssel sowie fehlende oder zusätzliche Signing-Subkeys ab.
