@@ -21,9 +21,9 @@ architectures = ["amd64", "arm64"]
 acquire_by_hash = true
 valid_until_days = 180
 
-# snapdog liefert zwei Binaerpakete aus einem Release. Der Renderer muss also
-# mehrere Pakete je Architektur und mehrere Versionen im Pool koennen; der
-# uebernommene aros-tools-Renderer kann beides nicht und wird neu geschrieben.
+# snapdog liefert zwei Binaerpakete aus einem Release, deshalb stehen hier zwei
+# Namen. Der Renderer indexiert, was im Pool liegt, und kann daher mehrere
+# Pakete je Architektur und mehrere Versionen gleichzeitig.
 [[projects]]
 name = "snapdog"
 prefix = "/snapdog"
