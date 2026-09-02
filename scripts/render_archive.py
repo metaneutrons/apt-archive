@@ -30,6 +30,7 @@ import hashlib
 import io
 import lzma
 import os
+import functools
 import re
 import shutil
 import tarfile
@@ -47,6 +48,9 @@ ARCHITECTURE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 SUITE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 COMPONENT = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 HEX40 = re.compile(r"^[0-9A-Fa-f]{40}$")
+# Alles, was in eine Release-Zeile geschrieben wird. Ein Zeilenumbruch
+# darin haengt der Datei eine beliebige weitere Zeile an.
+RELEASE_FIELD = re.compile(r"^[\x20-\x7e]+$")
 
 # Bounds against a hostile .deb.  A project release is attested before it gets
 # here, but the renderer must not become the weak link if that ever slips.
@@ -247,20 +251,46 @@ class Domain:
     """The parts of a domain manifest the renderer needs, already validated."""
 
     def __init__(self, data: dict, project_name: str, manifest_path: Path) -> None:
-        def need(section: str, key: str):
+        # Types are checked, never coerced. `bool("false")` is True and
+        # `int(True)` is 1, so coercing manifest input would turn a typo into a
+        # silently wrong archive: a disabled acquire_by_hash read as enabled,
+        # or a 180-day validity read as one day.
+        def need(section: str, key: str, kind: type):
             block = data.get(section)
             if not isinstance(block, dict) or key not in block:
                 fail(f"{manifest_path}: [{section}] is missing {key}")
-            return block[key]
+            value = block[key]
+            # bool is a subclass of int; an explicit bool must not pass as int.
+            if not isinstance(value, kind) or (kind is int and isinstance(value, bool)):
+                fail(
+                    f"{manifest_path}: [{section}] {key} must be "
+                    f"{kind.__name__}, not {type(value).__name__}"
+                )
+            return value
 
-        self.origin = str(need("domain", "origin"))
-        self.host = str(need("domain", "host"))
-        self.suite = str(need("release", "suite"))
-        self.codename = str(need("release", "codename"))
-        self.components = [str(value) for value in need("release", "components")]
-        self.architectures = [str(value) for value in need("release", "architectures")]
-        self.acquire_by_hash = bool(need("release", "acquire_by_hash"))
-        self.valid_until_days = int(need("release", "valid_until_days"))
+        def need_strings(section: str, key: str) -> list[str]:
+            value = need(section, key, list)
+            for item in value:
+                if not isinstance(item, str):
+                    fail(
+                        f"{manifest_path}: [{section}] {key} must hold only "
+                        f"strings, found {type(item).__name__}"
+                    )
+            return value
+
+        self.origin = need("domain", "origin", str)
+        self.host = need("domain", "host", str)
+        self.suite = need("release", "suite", str)
+        self.codename = need("release", "codename", str)
+        self.components = need_strings("release", "components")
+        self.architectures = need_strings("release", "architectures")
+        self.acquire_by_hash = need("release", "acquire_by_hash", bool)
+        self.valid_until_days = need("release", "valid_until_days", int)
+
+        # Every value reaching a Release line must be one printable line.
+        for label, value in (("origin", self.origin), ("host", self.host)):
+            if not RELEASE_FIELD.fullmatch(value):
+                fail(f"{manifest_path}: [domain] {label} must be one printable line")
 
         if not SUITE.fullmatch(self.suite) or not SUITE.fullmatch(self.codename):
             fail(f"{manifest_path}: suite and codename must be safe path components")
@@ -319,12 +349,25 @@ def load_domain(manifest_path: Path, project: str) -> Domain:
     return Domain(data, project, manifest_path)
 
 
-def digest(path: Path, algorithm: str) -> str:
-    value = hashlib.new(algorithm)
+@functools.lru_cache(maxsize=None)
+def digests(path: Path, size: int, algorithms: tuple[str, ...]) -> dict[str, str]:
+    """Hash a file once for every algorithm at the same time.
+
+    One pass per algorithm would read each .deb twice, and `Architecture: all`
+    packages appear in every binary index, so the same file would be read again
+    per architecture. `size` is part of the key so a changed file cannot hit a
+    stale entry.
+    """
+    values = {name: hashlib.new(name) for name in algorithms}
     with path.open("rb") as source:
         for block in iter(lambda: source.read(1024 * 1024), b""):
-            value.update(block)
-    return value.hexdigest()
+            for value in values.values():
+                value.update(block)
+    return {name: value.hexdigest() for name, value in values.items()}
+
+
+def digest(path: Path, algorithm: str) -> str:
+    return digests(path, path.stat().st_size, (algorithm,))[algorithm]
 
 
 def pool_letter(source_name: str) -> str:
@@ -406,11 +449,12 @@ def collect(pool_dir: Path, domain: Domain, component: str) -> list[Binary]:
 def stanza(binary: Binary, archive_root: Path) -> bytes:
     pool_file = archive_root / binary.pool_path
     size = pool_file.stat().st_size
+    computed = digests(pool_file, size, tuple(a for _, a in RELEASE_HASHES))
     lines = [f"{name}: {value}" for name, value in binary.fields.items()]
     lines.append(f"Filename: {binary.pool_path}")
     lines.append(f"Size: {size}")
     for label, algorithm in RELEASE_HASHES:
-        lines.append(f"{label}: {digest(pool_file, algorithm)}")
+        lines.append(f"{label}: {computed[algorithm]}")
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 

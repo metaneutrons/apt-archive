@@ -18,7 +18,8 @@ script_root=$(unset CDPATH; cd -- "$(dirname -- "$0")" && pwd -P)
 renderer="$script_root/render_archive.py"
 [[ -f "$renderer" && ! -L "$renderer" ]] || fail 'renderer is missing or unsafe'
 
-manifest= project= pool_dir= output_dir= metadata_epoch= component=
+manifest=''; project=''; pool_dir=''; output_dir=''
+metadata_epoch=''; component=''
 while (($#)); do
   case "$1" in
     --manifest)       manifest=${2:-}; shift 2 ;;
@@ -52,9 +53,20 @@ if [[ "${AR_RENDER_LOCAL:-}" == 1 ]]; then
 fi
 
 command -v docker >/dev/null || fail 'Docker is required for the pinned renderer'
-parent=$(unset CDPATH; cd -- "$(dirname -- "$output_dir")" && pwd -P)
-mkdir -p "$parent/.render.$$"
-trap 'rm -rf -- "$parent/.render.$$"' EXIT
+
+# Der Elternpfad kann fehlen, und output_dir kann relativ sein. Erst anlegen,
+# dann absolut aufloesen: ohne das scheitert `cd` am fehlenden Verzeichnis, und
+# das abschliessende `mv` landet relativ zum aufrufenden Arbeitsverzeichnis.
+parent_raw=$(dirname -- "$output_dir")
+mkdir -p -- "$parent_raw" || fail "cannot create the parent of output-dir: $parent_raw"
+parent=$(unset CDPATH; cd -- "$parent_raw" && pwd -P) \
+  || fail "cannot resolve the parent of output-dir: $parent_raw"
+output_dir="$parent/$(basename -- "$output_dir")"
+[[ ! -e "$output_dir" && ! -L "$output_dir" ]] || fail 'output-dir must be a new path'
+
+staging="$parent/.render.$$"
+mkdir -p "$staging"
+trap 'rm -rf -- "$staging"' EXIT
 
 docker run --rm --network none --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=16m \
@@ -63,8 +75,8 @@ docker run --rm --network none --read-only \
   --volume "$script_root:/scripts:ro" \
   --volume "$manifest_dir:/manifest:ro" \
   --volume "$(cd "$pool_dir" && pwd -P):/pool:ro" \
-  --volume "$parent/.render.$$:/out:rw" \
+  --volume "$staging:/out:rw" \
   python:3.14.2-slim-bookworm@sha256:e87711ef5c86aaeaa7031718a69db79d334d94c545c709583f651b8185870941 \
   python3 /scripts/render_archive.py "${args[@]}"
 
-mv "$parent/.render.$$/archive" "$output_dir"
+mv "$staging/archive" "$output_dir"
