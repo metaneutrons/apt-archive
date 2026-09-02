@@ -29,3 +29,6 @@ name = "snapdog"
 prefix = "/snapdog"
 source_repo = "SnapDogRocks/snapdog"
 packages = ["snapdog", "snapdog-client"]
+# Anzahl der jeweils behaltenen Releases im Pool. Ohne Grenze waechst er
+# unbegrenzt und jeder Lauf laedt alles neu.
+keep_versions = 5

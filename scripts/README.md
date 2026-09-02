@@ -68,6 +68,38 @@ in einem digest-gepinnten Container ohne Netz aus, weil die Bytes von
 `Packages.gz` sonst an der zlib-Version des Hosts haengen. `AR_RENDER_LOCAL=1`
 umgeht den Container.
 
+## Abholen
+
+```
+scripts/fetch-packages.sh --manifest domains/snapdog.cc/manifest.toml \
+  --project snapdog --pool-dir <neues verzeichnis>
+```
+
+Braucht ein `GITHUB_TOKEN` mit Lesezugriff auf das Quell-Repository, sonst
+nichts. Jede Datei besteht zwei Pruefungen, bevor sie im Pool landet: der
+SHA256 gegen den Digest, den die Release-API meldet, und
+`gh attestation verify` gegen das Quell-Repository.
+
+Die zweite ist der Vertrauensanker. Sie bindet die Datei an eine
+Workflow-Identitaet, nicht bloss an ein Konto, das ein Asset hochladen darf.
+**Ohne Attestierung wird abgebrochen, nicht gewarnt.** Ein Projekt ohne
+`actions/attest-build-provenance` kann so nicht veroeffentlicht werden, und das
+ist gewollt.
+
+Am 2. September 2026 gilt das fuer `SnapDogRocks/snapdog`: 56 Releases, keine
+Attestierung. Das Abholen bricht dort ab und nennt, was fehlt.
+
+Entwuerfe und Prereleases werden uebersprungen; die Archive fuehren stabile
+Versionen, und ein Prerelease gehoerte in eine eigene Suite. `keep_versions` im
+Manifest begrenzt, wie viele Releases im Pool landen: ohne Grenze waechst er
+unbegrenzt, und ein Projekt mit 56 Releases und vier Paketen bedeutete 224
+Downloads je Lauf.
+
+`select_assets.py` trennt die Auswahl in zwei Stufen, beide reine Funktionen
+ueber JSON und damit ohne Netz testbar. `gh release list` kann keine Assets
+liefern, deshalb erst die Tags filtern und dann je gewaehltem Tag ein
+`gh release view`, nicht eines je Release, das je existierte.
+
 ## Signatur
 
 `sign-archive.sh` erzeugt neben dem gerenderten `Release` die Dateien
@@ -127,6 +159,28 @@ vergleichen, je Architektur `Packages.gz` gegen die Summe aus `InRelease`
 pruefen, denselben Index unter seinem `by-hash/SHA512`-Pfad laden und
 vergleichen, und schliesslich den ersten `Filename`-Eintrag aufloesen und das
 Paket byteweise vergleichen.
+
+## Workflows
+
+`ci.yml` prueft Shell, Python, die Manifeste und die drei Vertragssuiten, und
+laeuft in einem eigenen Job den **containergepinnten** Renderer gegen den
+lokalen Pfad: beide muessen byteidentisch sein. Dieser Pfad liess sich auf dem
+Entwicklungsrechner nicht pruefen, das dortige Docker mountet frisch angelegte
+Verzeichnisse leer.
+
+`publish.yml` faehrt Abholen, Rendern, Signieren, Veroeffentlichen und
+Nachkontrolle. Kein Cron: GitHub schaltet geplante Workflows in oeffentlichen
+Repositories nach 60 Tagen ohne Commit ab, und dieses Repository ist commitarm.
+Der Anstoss kommt per `workflow_dispatch` oder `repository_dispatch`.
+
+**Eine Environment je Domain**, `release-<host>`. Der Standard nennt eine
+einzige `release`; das gilt fuer ein Projektrepository. Hier gibt es zwei
+Schluessel und zwei Buckets, und ein Lauf fuer die eine Domain darf die
+Zugangsdaten der anderen nicht lesen koennen.
+
+Der Preflight-Job prueft Anfrage, Secrets und Bucket, ohne etwas zu schreiben.
+Ein `client_payload` kommt von aussen und erreicht die Shell ausschliesslich
+ueber `env`, nie per Interpolation.
 
 ## Tests
 
