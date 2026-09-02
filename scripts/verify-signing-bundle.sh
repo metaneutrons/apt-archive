@@ -14,12 +14,17 @@ set -euo pipefail
 
 fail() { printf '::error::AR120 %s\n' "$*" >&2; exit 1; }
 
+# Ein `shift 2` ohne Wert bricht mit bashs eigener Meldung ab, und bei
+# `set -e` sogar lautlos: Exitcode 1, keine Ausgabe auf stdout oder stderr. In
+# einem Workflow bliebe nur "Process completed with exit code 1" stehen.
+opt_value() { [[ $# -ge 2 && -n "$2" ]] || fail "$1 requires a value"; }
+
 homedir=''; fingerprint=''; signing_subkey=''
 while (($#)); do
   case "$1" in
-    --homedir)        homedir=${2:-}; shift 2 ;;
-    --fingerprint)    fingerprint=${2:-}; shift 2 ;;
-    --signing-subkey) signing_subkey=${2:-}; shift 2 ;;
+    --homedir)        opt_value "$@"; homedir=$2; shift 2 ;;
+    --fingerprint)    opt_value "$@"; fingerprint=$2; shift 2 ;;
+    --signing-subkey) opt_value "$@"; signing_subkey=$2; shift 2 ;;
     *) fail "unknown argument: $1" ;;
   esac
 done

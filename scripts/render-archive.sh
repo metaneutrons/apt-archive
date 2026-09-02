@@ -14,6 +14,11 @@ set -euo pipefail
 
 fail() { printf '::error::AR110 %s\n' "$*" >&2; exit 1; }
 
+# Ein `shift 2` ohne Wert bricht mit bashs eigener Meldung ab, und bei
+# `set -e` sogar lautlos: Exitcode 1, keine Ausgabe auf stdout oder stderr. In
+# einem Workflow bliebe nur "Process completed with exit code 1" stehen.
+opt_value() { [[ $# -ge 2 && -n "$2" ]] || fail "$1 requires a value"; }
+
 script_root=$(unset CDPATH; cd -- "$(dirname -- "$0")" && pwd -P)
 renderer="$script_root/render_archive.py"
 [[ -f "$renderer" && ! -L "$renderer" ]] || fail 'renderer is missing or unsafe'
@@ -22,12 +27,12 @@ manifest=''; project=''; pool_dir=''; output_dir=''
 metadata_epoch=''; component=''
 while (($#)); do
   case "$1" in
-    --manifest)       manifest=${2:-}; shift 2 ;;
-    --project)        project=${2:-}; shift 2 ;;
-    --pool-dir)       pool_dir=${2:-}; shift 2 ;;
-    --output-dir)     output_dir=${2:-}; shift 2 ;;
-    --metadata-epoch) metadata_epoch=${2:-}; shift 2 ;;
-    --component)      component=${2:-}; shift 2 ;;
+    --manifest)       opt_value "$@"; manifest=$2; shift 2 ;;
+    --project)        opt_value "$@"; project=$2; shift 2 ;;
+    --pool-dir)       opt_value "$@"; pool_dir=$2; shift 2 ;;
+    --output-dir)     opt_value "$@"; output_dir=$2; shift 2 ;;
+    --metadata-epoch) opt_value "$@"; metadata_epoch=$2; shift 2 ;;
+    --component)      opt_value "$@"; component=$2; shift 2 ;;
     *) fail "unknown argument: $1" ;;
   esac
 done

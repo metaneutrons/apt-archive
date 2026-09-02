@@ -178,10 +178,13 @@ if [ $? -ne 0 ]; then bad "T4 Signatur mit Zwei-Subkey-Bundle" "$out"; else
   check "T4 armored Keyring fuehrt Subkey A" \
     "$(gpg --no-options --batch --with-colons --show-keys "$D/example-archive-keyring.asc" |
        awk -F: '$1=="sub"{s=1;next} $1=="fpr" && s{print toupper($10); exit}')" "${SUB_A^^}"
-  # Beide Fassungen muessen dasselbe Zertifikat sein.
+  # Beide Fassungen muessen dasselbe Zertifikat sein. Direkt die Fingerprints
+  # vergleichen, nicht deren Hash: `md5` gibt es nur auf macOS, GNU-Systeme
+  # haben `md5sum`, und ein Hash bringt beim Vergleich zweier Textlisten
+  # nichts.
   check "T4 armored und dearmored deckungsgleich" \
-    "$(gpg --no-options --batch --with-colons --show-keys "$D/example-archive-keyring.asc" | grep '^fpr' | sort | md5)" \
-    "$(gpg --no-options --batch --with-colons --show-keys "$D/example-archive-keyring.gpg" | grep '^fpr' | sort | md5)"
+    "$(gpg --no-options --batch --with-colons --show-keys "$D/example-archive-keyring.asc" | awk -F: '$1=="fpr"{print $10}' | sort | tr '\n' ' ')" \
+    "$(gpg --no-options --batch --with-colons --show-keys "$D/example-archive-keyring.gpg" | awk -F: '$1=="fpr"{print $10}' | sort | tr '\n' ' ')"
   # Gegenprobe: derselbe Baum, aber Manifest auf B. Dann muss B signieren.
   E="$work/e"; render "$E"
   manifest "$work/m-b.toml" "$PRIMARY" "$SUB_B"
@@ -195,10 +198,13 @@ if [ $? -ne 0 ]; then bad "T4 Signatur mit Zwei-Subkey-Bundle" "$out"; else
 fi
 
 printf '\n== T5  Epoche vor der Schluesselerzeugung ==\n'
+# Einen Tag vor der Erzeugung, aus EPOCH abgeleitet. Eine feste Epoche waere
+# von der Kalenderzeit abhaengig und die Zusicherung damit an ein Datum
+# gebunden statt an den Sachverhalt.
 F="$work/f"; render "$F"
 msg=$("$root/scripts/sign-archive.sh" --manifest "$work/m.toml" --archive-dir "$F" \
         --private-key "$work/bundle-a.asc" --passphrase-file "$work/pass" \
-        --metadata-epoch 1700000000 2>&1)
+        --metadata-epoch "$((EPOCH - 86400))" 2>&1)
 if printf '%s' "$msg" | grep -qF 'precedes the subkey creation'; then
   ok "T5 zu fruehe Epoche wird benannt abgelehnt"
 else

@@ -20,15 +20,20 @@
 set -euo pipefail
 
 fail() { printf '::error::AR160 %s\n' "$*" >&2; exit 1; }
+
+# Ein `shift 2` ohne Wert bricht mit bashs eigener Meldung ab, und bei
+# `set -e` sogar lautlos: Exitcode 1, keine Ausgabe auf stdout oder stderr. In
+# einem Workflow bliebe nur "Process completed with exit code 1" stehen.
+opt_value() { [[ $# -ge 2 && -n "$2" ]] || fail "$1 requires a value"; }
 step() { printf '  %s\n' "$*"; }
 
 manifest=''; project=''; archive_dir=''; base_override=''
 while (($#)); do
   case "$1" in
-    --manifest)    manifest=${2:-}; shift 2 ;;
-    --project)     project=${2:-}; shift 2 ;;
-    --archive-dir) archive_dir=${2:-}; shift 2 ;;
-    --base-url)    base_override=${2:-}; shift 2 ;;
+    --manifest)    opt_value "$@"; manifest=$2; shift 2 ;;
+    --project)     opt_value "$@"; project=$2; shift 2 ;;
+    --archive-dir) opt_value "$@"; archive_dir=$2; shift 2 ;;
+    --base-url)    opt_value "$@"; base_override=$2; shift 2 ;;
     *) fail "unknown argument: $1" ;;
   esac
 done
