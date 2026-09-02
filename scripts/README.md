@@ -68,12 +68,84 @@ in einem digest-gepinnten Container ohne Netz aus, weil die Bytes von
 `Packages.gz` sonst an der zlib-Version des Hosts haengen. `AR_RENDER_LOCAL=1`
 umgeht den Container.
 
+## Signatur
+
+`sign-archive.sh` erzeugt neben dem gerenderten `Release` die Dateien
+`InRelease` und `Release.gpg` sowie den Domain-Keyring in beiden Fassungen, und
+prueft sein Ergebnis mit `gpgv` gegen genau den Keyring, den ein Client
+bekommt. `verify-signing-bundle.sh` prueft vorher das importierte Material.
+
+Signiert wird immer mit dem Subkey aus dem Manifest, gepinnt per abschliessendem
+Ausrufezeichen. Ohne das waehlt gpg bei mehreren Signing-Subkeys selbst einen
+aus, und der Export liefert alle statt des einen, der zu dieser Domain gehoert.
+
+Die Metadaten-Epoche darf nicht vor der Erzeugung des Subkeys liegen. gpg
+signiert sonst nicht und meldet nur "unbrauchbarer geheimer Schluessel"; das
+Skript lehnt es benannt ab. Folge: ein alter Baum laesst sich nach einer
+Rotation nicht mit seinem urspruenglichen `SOURCE_DATE_EPOCH` nachsignieren.
+
+## Veroeffentlichung
+
+```
+scripts/publish-archive.sh --manifest domains/metaneutrons.cc/manifest.toml \
+  --project aros-tools --archive-dir <signierte wurzel> [--preflight]
+```
+
+Zugangsdaten kommen aus `R2_ACCESS_KEY_ID` und `R2_SECRET_ACCESS_KEY`, nie aus
+Argumenten. `--preflight` prueft Zugang, Bucket und Plan und schreibt nichts.
+
+**Objekte zuerst, Metadaten zuletzt.** Vier Phasen in dieser Reihenfolge:
+Keyring, Pool, Indexe, dann `Release`, `Release.gpg` und `InRelease`. Umgekehrt
+entstuende ein Fenster, in dem signierte Metadaten auf noch nicht vorhandene
+Pakete zeigen. Innerhalb einer Phase laeuft der Upload parallel, zwischen den
+Phasen streng sequenziell, und die Release-Phase ganz sequenziell.
+
+**Der Keyring liegt in der Bucket-Wurzel**, nicht unter dem Projektpraefix: er
+gilt fuer die Domain, nicht fuer ein Projekt.
+
+**Es wird nie geloescht und nie synchronisiert.** Alte by-hash-Dateien muessen
+mindestens eine Release-Generation liegen bleiben, damit ein laufendes
+`apt update` nicht ins Leere greift; ein `sync --delete` entfernte genau die.
+
+**Keine Cache-Header auf den Objekten.** Die kommen aus den Cache Rules der
+Zone; eine zweite Quelle der Wahrheit waere eine zu viel.
+
+`publication_plan.py` berechnet den Plan und ist davon getrennt, weil die
+Reihenfolge und die Zuordnung von Pfad zu Objektschluessel reine Rechnung ist
+und ohne Zugangsdaten pruefbar bleibt.
+
+## Nachkontrolle
+
+```
+scripts/verify-publication.sh --manifest <manifest> --project <name> \
+  --archive-dir <lokale wurzel> [--base-url <uebersteuerung>]
+```
+
+Geprueft wird, was ein Client bekommt, nicht was hochgeladen wurde: Keyring
+laden, `InRelease` damit gegen `gpgv` halten, byteweise gegen die lokale Fassung
+vergleichen, je Architektur `Packages.gz` gegen die Summe aus `InRelease`
+pruefen, denselben Index unter seinem `by-hash/SHA512`-Pfad laden und
+vergleichen, und schliesslich den ersten `Filename`-Eintrag aufloesen und das
+Paket byteweise vergleichen.
+
 ## Tests
 
 ```
 bash tests/test_render_archive.sh
 ```
 
-Sechsundzwanzig Zusicherungen, kein Netz, kein Schluessel, kein `dpkg`.
-`tests/make_deb.py` baut echte `.deb`-Dateien mit den Bordmitteln von Python, so
-dass die Tests gegen Paketbytes laufen statt gegen eine Attrappe.
+```
+bash tests/test_signing.sh
+bash tests/test_publication.sh
+```
+
+Dreiundsiebzig Zusicherungen, kein Netz nach draussen, kein echtes
+Schluesselmaterial, kein `dpkg`. `tests/make_deb.py` baut echte `.deb`-Dateien
+mit den Bordmitteln von Python, so dass die Tests gegen Paketbytes laufen statt
+gegen eine Attrappe. Die Signaturtests erzeugen einen Wegwerfschluessel in der
+vorgeschriebenen Form, und die Nachkontrolle laeuft gegen einen lokalen Server,
+der den Baum so ausliefert wie der Bucket.
+
+**Was nicht getestet ist:** `publish-archive.sh` selbst. Der Upload braucht
+R2-Zugangsdaten, die es nur als GitHub-Secret gibt. Geprueft sind seine Syntax,
+shellcheck und der Plan, den er ausfuehrt; die Ausfuehrung ist es nicht.
