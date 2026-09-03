@@ -40,10 +40,13 @@ packages = ["aros-tools"]
 keep_versions = 5
 
 [[projects]]
-name = "devserial-mcp"
-prefix = "/devserial-mcp"
-source_repo = "metaneutrons/devserial-mcp"
-packages = ["devserial-mcp"]
+# Das Repository heisst devserial, und der Debian-Paketname war nie
+# devserial-mcp. Beide Felder werden geprueft: publish.yml den Projektnamen
+# gegen dieses Manifest, select_assets.py das Paket gegen die Release-Assets.
+name = "devserial"
+prefix = "/devserial"
+source_repo = "metaneutrons/devserial"
+packages = ["devserial"]
 # Anzahl der jeweils behaltenen Releases im Pool. Ohne Grenze waechst er
 # unbegrenzt und jeder Lauf laedt alles neu.
 keep_versions = 5
