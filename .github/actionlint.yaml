@@ -1,0 +1,7 @@
+# GitHub Actions added concurrency.queue after actionlint 1.7.12. Keep this
+# exception narrow: only the documented key in the publish workflow is ignored;
+# every other workflow diagnostic remains active.
+paths:
+  .github/workflows/publish.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'

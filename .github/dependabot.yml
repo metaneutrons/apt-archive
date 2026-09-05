@@ -1,0 +1,30 @@
+# The grouping is split by update type. A single group `patterns: ['*']` across
+# all types bundles breaking changes together with harmless bumps, and one of
+# them then drags the rest along. Minor and patch stay bundled, major comes on
+# its own.
+#
+# There is deliberately no pip entry: the renderer uses the standard library
+# only, so there are no Python dependencies.
+#
+# NOT covered: the digest-pinned container image in scripts/render-archive.sh.
+# Dependabot tracks image digests in a Dockerfile, not in a shell script. That
+# pin has to be updated by hand; it sits there with its reasoning.
+
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '05:15'
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
+    groups:
+      github-actions-minor-patch:
+        patterns: ['*']
+        update-types: [minor, patch]

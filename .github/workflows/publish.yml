@@ -1,0 +1,208 @@
+name: Publish
+
+# One run per domain and project.
+#
+# repository_dispatch is how a project knocks after its release, and how the
+# external watchdog asks for a re-signature. No cron: GitHub switches scheduled
+# workflows off in public repositories after 60 days without a commit, and this
+# repository is commit-poor.
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: Archive domain
+        required: true
+        type: choice
+        options:
+          - metaneutrons.cc
+          - snapdog.cc
+      project:
+        description: Project name from the manifest
+        required: true
+        type: string
+  repository_dispatch:
+    types: [publish-archive]
+
+permissions:
+  contents: read
+
+# One bucket, one writer. Two runs at once could interleave the phases and put
+# signed metadata down before their packages.
+concurrency:
+  group: publish-${{ github.event.inputs.domain || github.event.client_payload.domain }}
+  cancel-in-progress: false
+  # A new run must not displace a run of another publication of the same
+  # domain that is already waiting. Up to 100 requests queue up; writing still
+  # happens strictly one at a time.
+  queue: max
+
+jobs:
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # One environment per domain. The standard names a single `release`, which
+    # holds for a project repository; here there are two keys and two buckets,
+    # and a run for one domain must not be able to read the other one's
+    # credentials.
+    environment: release-${{ github.event.inputs.domain || github.event.client_payload.domain }}
+    outputs:
+      domain: ${{ steps.resolve.outputs.domain }}
+      project: ${{ steps.resolve.outputs.project }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve and validate the request
+        id: resolve
+        env:
+          # Through env only, never interpolated: a client_payload comes from
+          # outside and would otherwise be a shell injection vector.
+          IN_DOMAIN: ${{ github.event.inputs.domain || github.event.client_payload.domain }}
+          IN_PROJECT: ${{ github.event.inputs.project || github.event.client_payload.project }}
+        run: |
+          set -euo pipefail
+          case "$IN_DOMAIN" in
+            metaneutrons.cc|snapdog.cc) ;;
+            *) echo "::error::unknown domain '$IN_DOMAIN'"; exit 1 ;;
+          esac
+          printf '%s' "$IN_PROJECT" | grep -Eq '^[a-z0-9][a-z0-9-]{1,63}$' \
+            || { echo "::error::unsafe project name"; exit 1; }
+          manifest="domains/${IN_DOMAIN}/manifest.toml"
+          [ -f "$manifest" ] || { echo "::error::no manifest for $IN_DOMAIN"; exit 1; }
+          MANIFEST="$manifest" PROJECT="$IN_PROJECT" python3 - <<'PY'
+          import os, tomllib
+          with open(os.environ["MANIFEST"], "rb") as handle:
+              data = tomllib.load(handle)
+          names = [p.get("name") for p in data.get("projects", [])]
+          if os.environ["PROJECT"] not in names:
+              raise SystemExit(
+                  f"project {os.environ['PROJECT']!r} is not in the manifest; "
+                  f"declared: {', '.join(map(str, names))}")
+          PY
+          printf 'domain=%s\n' "$IN_DOMAIN" >> "$GITHUB_OUTPUT"
+          printf 'project=%s\n' "$IN_PROJECT" >> "$GITHUB_OUTPUT"
+
+      - name: Every value the run needs is present and well formed
+        env:
+          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+          APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          # Presence and shape only, never the value or metadata derived from it.
+          for name in APT_GPG_PRIVATE_KEY APT_GPG_PASSPHRASE \
+                      R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
+            eval "value=\${$name:-}"
+            [ -n "$value" ] || { echo "::error::$name is not set in this environment"; exit 1; }
+            printf '  %s present\n' "$name"
+          done
+          printf '%s' "$APT_GPG_PRIVATE_KEY" | grep -q 'BEGIN PGP PRIVATE KEY BLOCK' \
+            || { echo '::error::APT_GPG_PRIVATE_KEY is not an armored private key block'; exit 1; }
+          printf '  the key block is armored\n'
+          # That this is an export of the subkeys *only* is checked by
+          # verify-signing-bundle.sh on the imported material. From the outside
+          # the armor does not show it.
+
+      - name: The bucket answers and nothing is written
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          # Check the target values strictly and without credentials first.
+          # Only then may the read-only bucket check use the environment
+          # secrets.
+          MANIFEST="domains/${{ steps.resolve.outputs.domain }}/manifest.toml"
+          target=$(python3 scripts/publication_target.py --manifest "$MANIFEST") \
+            || { echo '::error::invalid R2 publication target'; exit 1; }
+          IFS=$'\t' read -r bucket account <<< "$target"
+          AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID" \
+          AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY" \
+          AWS_DEFAULT_REGION=auto \
+          AWS_EC2_METADATA_DISABLED=true \
+          aws s3api head-bucket --bucket "$bucket" \
+            --endpoint-url "https://${account}.r2.cloudflarestorage.com" \
+            || { echo "::error::cannot reach bucket $bucket"; exit 1; }
+          printf '  bucket %s reachable\n' "$bucket"
+
+  publish:
+    name: Fetch, render, sign, publish, verify
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: release-${{ needs.preflight.outputs.domain }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch the packages and verify their attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ./scripts/fetch-packages.sh \
+            --manifest "domains/${{ needs.preflight.outputs.domain }}/manifest.toml" \
+            --project "${{ needs.preflight.outputs.project }}" \
+            --pool-dir "$RUNNER_TEMP/pool"
+
+      - name: Render the archive
+        run: |
+          set -euo pipefail
+          # Created internally and only after the fetch and the environment
+          # approval: neither a dispatch caller nor the re-sign watchdog
+          # supplies this clock.
+          publication_epoch=$(date -u +%s)
+          printf 'publication epoch %s\n' "$publication_epoch"
+          printf 'PUBLICATION_EPOCH=%s\n' "$publication_epoch" >> "$GITHUB_ENV"
+          ./scripts/render-archive.sh \
+            --manifest "domains/${{ needs.preflight.outputs.domain }}/manifest.toml" \
+            --project "${{ needs.preflight.outputs.project }}" \
+            --pool-dir "$RUNNER_TEMP/pool" \
+            --output-dir "$RUNNER_TEMP/archive" \
+            --publication-epoch "$publication_epoch"
+
+      - name: Sign it
+        env:
+          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+          APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/signing.asc"
+          pass="$RUNNER_TEMP/signing.pass"
+          # Both files disappear even on an abort.
+          trap 'rm -f -- "$key" "$pass"' EXIT
+          umask 077
+          printf '%s' "$APT_GPG_PRIVATE_KEY" > "$key"
+          printf '%s' "$APT_GPG_PASSPHRASE" > "$pass"
+          ./scripts/sign-archive.sh \
+            --manifest "domains/${{ needs.preflight.outputs.domain }}/manifest.toml" \
+            --archive-dir "$RUNNER_TEMP/archive" \
+            --private-key "$key" --passphrase-file "$pass" \
+            --publication-epoch "$PUBLICATION_EPOCH"
+
+      - name: Publish it, objects before metadata
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          ./scripts/publish-archive.sh \
+            --manifest "domains/${{ needs.preflight.outputs.domain }}/manifest.toml" \
+            --project "${{ needs.preflight.outputs.project }}" \
+            --archive-dir "$RUNNER_TEMP/archive" \
+            --publication-epoch "$PUBLICATION_EPOCH"
+
+      - name: Verify what a client receives
+        run: |
+          set -euo pipefail
+          # Against the public URL, not against the bucket: what is checked is
+          # what gets served.
+          ./scripts/verify-publication.sh \
+            --manifest "domains/${{ needs.preflight.outputs.domain }}/manifest.toml" \
+            --project "${{ needs.preflight.outputs.project }}" \
+            --archive-dir "$RUNNER_TEMP/archive" \
+            --publication-epoch "$PUBLICATION_EPOCH"

@@ -1,0 +1,27 @@
+# An OpenPGP fingerprint is public by construction: it is the value a client is
+# told to compare against. gitleaks sees forty hex characters with high entropy
+# and reports its generic-api-key rule, a false positive on exactly the two
+# manifest fields that exist in order to be published.
+#
+# The exemption is narrow on purpose, and each restriction earns its place.
+# `targetRules` limits it to the one rule that misfires. `regexTarget = "match"`
+# tests the matched assignment rather than the line: a finding's `line` is a
+# multi-line window, so an anchored pattern there would also exempt a real
+# secret sitting next to a fingerprint. Anchoring then requires the whole
+# assignment to be one of these two keys with a value of exactly forty uppercase
+# hex characters, or the TBD placeholder used before a key exists.
+#
+# No `paths` entry: in a directory scan gitleaks applies a global path allowlist
+# before it reads the file, which would exempt everything in that manifest.
+#
+# Probed in both directions: the two manifests scan clean, and a planted
+# credential still reports, inside a manifest as well as outside one.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Published OpenPGP fingerprints in a domain manifest"
+targetRules = ["generic-api-key"]
+regexTarget = "match"
+regexes = ['''^(primary_fingerprint|signing_subkey) = "([0-9A-F]{40}|TBD)"$''']

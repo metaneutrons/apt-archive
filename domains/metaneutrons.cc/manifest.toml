@@ -1,0 +1,74 @@
+# An archive domain manifest. Everything domain-specific lives here, the
+# renderer and the workflows are shared. A later split moves this directory into
+# a repository of its own without any code travelling with it.
+
+[domain]
+host = "deb.metaneutrons.cc"
+base_url = "https://deb.metaneutrons.cc"
+origin = "metaneutrons"
+keyring_package = "metaneutrons-archive-keyring"
+keyring_file = "/usr/share/keyrings/metaneutrons-archive-keyring.pgp"
+
+[signing]
+# The primary key is certify-only and stays offline. Signing happens with the
+# domain subkey, pinned by a trailing exclamation mark. Both values are entered
+# at key creation and changed afterwards only on rotation.
+primary_fingerprint = "1B7B79417383648BBFBE282E01AB8296EF0FCD76"
+signing_subkey = "A0C21782FC507CCBD666F3ED242072FEC8BE54A4"
+
+[publication]
+r2_bucket = "deb-metaneutrons-cc"
+r2_account_id = "9122b44fa4c05b23985d6a0b779caa01"
+
+[release]
+suite = "rolling"
+codename = "rolling"
+components = ["main"]
+architectures = ["amd64", "arm64"]
+acquire_by_hash = true
+valid_until_days = 180
+
+# Every project gets its own prefix and thereby its own Valid-Until clock. A
+# neglected project therefore does not drag the others down with it.
+[[projects]]
+name = "aros-tools"
+prefix = "/aros-tools"
+source_repo = "metaneutrons/aros-tools"
+packages = ["aros-tools"]
+# How many releases are kept in the pool. Without a limit it grows without
+# bound and every run downloads everything again.
+keep_versions = 5
+
+[[projects]]
+# The repository is called devserial, and the Debian package name was never
+# devserial-mcp. Both fields are checked: publish.yml checks the project name
+# against this manifest, select_assets.py checks the package against the release
+# assets.
+name = "devserial"
+prefix = "/devserial"
+source_repo = "metaneutrons/devserial"
+packages = ["devserial"]
+# How many releases are kept in the pool. Without a limit it grows without
+# bound and every run downloads everything again.
+keep_versions = 5
+
+[[projects]]
+name = "ugos-cli"
+prefix = "/ugos-cli"
+source_repo = "metaneutrons/ugos-cli"
+packages = ["ugos-cli"]
+# How many releases are kept in the pool. Without a limit it grows without
+# bound and every run downloads everything again.
+keep_versions = 5
+
+[[projects]]
+# Repository, crate and Debian package are all called bups here. The glibc
+# packages are built natively per architecture in a digest-pinned Bookworm
+# container, so the file name carries amd64 or arm64 and no Debian revision.
+name = "bups"
+prefix = "/bups"
+source_repo = "metaneutrons/bups"
+packages = ["bups"]
+# How many releases are kept in the pool. Without a limit it grows without
+# bound and every run downloads everything again.
+keep_versions = 5

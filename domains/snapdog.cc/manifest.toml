@@ -1,0 +1,34 @@
+[domain]
+host = "deb.snapdog.cc"
+base_url = "https://deb.snapdog.cc"
+origin = "SnapDogRocks"
+keyring_package = "snapdog-archive-keyring"
+keyring_file = "/usr/share/keyrings/snapdog-archive-keyring.pgp"
+
+[signing]
+primary_fingerprint = "1B7B79417383648BBFBE282E01AB8296EF0FCD76"
+signing_subkey = "CFE7BACA652DD0D72EB7156FC7252FAD41F8F7DA"
+
+[publication]
+r2_bucket = "deb-snapdog-cc"
+r2_account_id = "9122b44fa4c05b23985d6a0b779caa01"
+
+[release]
+suite = "rolling"
+codename = "rolling"
+components = ["main"]
+architectures = ["amd64", "arm64"]
+acquire_by_hash = true
+valid_until_days = 180
+
+# snapdog ships two binary packages from one release, hence the two names here.
+# The renderer indexes whatever sits in the pool and can therefore handle
+# several packages per architecture and several versions at once.
+[[projects]]
+name = "snapdog"
+prefix = "/snapdog"
+source_repo = "SnapDogRocks/snapdog"
+packages = ["snapdog", "snapdog-client"]
+# How many releases are kept in the pool. Without a limit it grows without
+# bound and every run downloads everything again.
+keep_versions = 5
