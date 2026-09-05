@@ -1,7 +1,7 @@
 # Renderer
 
 From a domain manifest and a directory full of `.deb` files, `render_archive.py`
-produces the complete, ready-to-sign archive tree **of one project**. It knows
+produces the complete, ready-to-sign archive tree **of one domain**. It knows
 no network, no key and no Cloudflare API.
 
 ```
@@ -13,8 +13,8 @@ scripts/render-archive.sh \
   --publication-epoch 1700000000
 ```
 
-The result sits under `--output-dir`, the archive root of one project prefix, so
-for example `https://deb.metaneutrons.cc/aros-tools`:
+The result sits under `--output-dir`, the domain root, for example
+`https://deb.metaneutrons.cc`:
 
 ```
 pool/main/a/aros-tools/aros-tools_1.0.0-1_amd64.deb
@@ -23,13 +23,47 @@ dists/rolling/main/binary-amd64/Packages.gz
 dists/rolling/main/binary-amd64/by-hash/SHA256/<sum>
 dists/rolling/main/binary-amd64/by-hash/SHA512/<sum>
 dists/rolling/Release
+dists/rolling/archive-state.json
 ```
 
-## One archive per project
+## Shared-domain transactions
 
-Every project gets its own prefix and thereby its own `Release` file with its
-own `Valid-Until` clock. A project without a release for half a year expires
-without dragging the others down with it.
+Every domain has one root archive and one publication clock. Project ownership
+is by package name; overlapping names and project prefixes are rejected.
+`--project` on the renderer is request validation, never an index filter.
+
+Before rendering, `domain_snapshot.py prepare` restores the previous `InRelease`
+directly from R2, not the CDN. The pinned domain key verifies its signature;
+the signed `archive-state.json` and all indexes are fetched by SHA256/SHA512,
+and every retained package is measured and matched to its control identity.
+The indexes, compressed copies and signed inventory must describe exactly
+the same packages. Only then is the selected, freshly attested import merged.
+Unselected projects require no GitHub availability and keep their original bytes.
+`dpkg --compare-versions` enforces Debian version ordering (including epochs,
+tildes and revisions) to reject rollback and architecture removal.
+
+An empty project request is metadata-only refresh. Expired metadata can be
+restored at its original signed validity interval, but the new publication must
+use a fresh epoch strictly newer than the baseline. Keys must still be active.
+No signature, state, ownership or payload error becomes an empty archive.
+Bootstrap is allowed only when `InRelease` is absent **and** an authenticated
+listing proves an empty bucket. HTTP 404 from a CDN is not that proof.
+
+The baseline records the domain, prior signature time, InRelease SHA256 and
+object ETag. Before the first PUT, `guard` checks that generation and every
+immutable object, including old unindexed pool paths. Identical immutable bytes
+are skipped; different bytes abort. New immutable objects use `If-None-Match`.
+Before release metadata, the generation is rechecked; the final `InRelease` PUT
+uses `If-Match` (or `If-None-Match` for bootstrap). R2 reads, metadata parsing,
+decompression, package count and aggregate payload bytes are bounded.
+
+The domain concurrency queue is the single-writer boundary. This is **not** an
+atomic multi-object store commit: failed uploads can leave unreferenced objects
+or detached `Release`/`Release.gpg` out of sync. Do not assume success, delete
+partial objects, force changed bytes, or retry from a stale baseline. Prepare
+again from the last valid InRelease; if no valid marker exists in a nonempty
+bucket, stop for explicit recovery. Pool and by-hash garbage collection is not
+implemented or implicitly authorized.
 
 ## The pool is the input, not one version
 
@@ -59,7 +93,7 @@ Everything that would quietly damage an archive:
 - the same package version both as `Architecture: all` and as a native package
 - unsafe `Version` or `Source` values, or archive-computed control fields such
   as `Filename`, `Size`, `SHA256` and `SHA512` in the incoming package
-- a project name or prefix that is not a safe single-line Release field
+- unsafe project names, project prefixes, or overlapping package ownership
 - a manifest with `acquire_by_hash` switched off
 - an output directory that already exists
 
@@ -138,7 +172,7 @@ rendered again with a fresh publication epoch.
 ```
 scripts/publish-archive.sh --manifest domains/metaneutrons.cc/manifest.toml \
   --project aros-tools --archive-dir <signed root> \
-  --publication-epoch <epoch> [--preflight]
+  --publication-epoch <epoch> --baseline <prepared-baseline.json> [--preflight]
 ```
 
 Credentials come from `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`, never from
@@ -153,8 +187,7 @@ would open a window in which signed metadata point at packages that do not exist
 yet. Within a phase the upload runs in parallel, between the phases strictly
 sequentially, and the release phase entirely sequentially.
 
-**The keyring sits in the bucket root**, not under the project prefix: it holds
-for the domain, not for a project.
+**The keyring sits in the bucket root**, beside the shared `pool/` and `dists/`.
 
 **Nothing is ever deleted and nothing is ever synchronised.** Old by-hash files
 have to stay for at least one release generation, so that an `apt update` in
@@ -175,17 +208,20 @@ scripts/verify-publication.sh --manifest <manifest> --project <name> \
   [--base-url <override>]
 ```
 
-What is checked is what a client receives, not what was uploaded: fetch the
-keyring, hold `InRelease` against `gpgv` with it, compare byte for byte against
-the local copy, extract the signed plaintext and check publication time,
-`Valid-Until` and signature time, check `Packages.gz` per architecture against
-the sum from `InRelease`, fetch the same index under its `by-hash/SHA512` path
-and compare, and finally resolve every `Filename` entry and compare the package
-byte for byte.
+The shared verifier first checks the local candidate's entire trust graph:
+pinned key, both signatures and time, state/control/index agreement, both by-hash
+algorithms, and exact regular-file inventory. It then fetches **every** public
+object with bounded reads and requires byte identity. This includes both keyring
+forms, all packages, indexes, state, by-hash objects and all three Release files.
+`--local-only` is the publisher's pre-write gate. A URL override is restricted
+to a loopback HTTP server for isolated tests.
 
 ## Workflows
 
-`ci.yml` checks shell, Python, the manifests and the five contract suites, and
+`ci.yml` checks shell, Python, the manifests, five existing contract suites and
+the signed-domain transaction suite. Real Debian 12 and 13 clients verify a
+two-project archive, download both native architectures and a portable package,
+and reject a wrong trust anchor. CI also
 in a job of its own runs the **container-pinned** renderer against the local
 path: the two have to be byte-identical. This path could not be checked on the
 development machine, where Docker mounts freshly created directories empty.
