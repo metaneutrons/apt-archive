@@ -151,7 +151,12 @@ gpg --no-options --batch --homedir "$gnupg_home" --armor --no-emit-version \
 gpg --no-options --batch --homedir "$gnupg_home" --no-emit-version \
   --export "${signing_subkey}!" > "$dearmored" \
   || fail 'dearmored keyring export failed'
-if ! subkeys=$(gpg --no-options --batch --with-colons --show-keys "$dearmored" |
+# --homedir, like every other gpg call here. Without it gpg falls back to
+# ~/.gnupg, and on a runner that directory does not exist: "Fatal:
+# /home/runner/.gnupg: directory does not exist!". Reading keys from a file
+# needs no keyring, but gpg initialises its home before it gets that far.
+if ! subkeys=$(gpg --no-options --batch --homedir "$gnupg_home" \
+                 --with-colons --show-keys "$dearmored" |
                  awk -F: '$1 == "sub" { count += 1 } END { print count + 0 }'); then
   fail 'cannot inspect the exported keyring'
 fi
@@ -167,7 +172,10 @@ chmod 0644 "$armored" "$dearmored" \
 verify_signature() {  # $1 = label, then gpgv arguments
   local label=$1 status signature_epoch
   shift
-  status=$(gpgv --keyring "$dearmored" --status-fd 1 "$@" 2>/dev/null) \
+  # --homedir for the same reason as above. gpgv reads its keyring from the
+  # file given here, but it still wants a home directory to exist.
+  status=$(gpgv --homedir "$gnupg_home" --keyring "$dearmored" \
+             --status-fd 1 "$@" 2>/dev/null) \
     || fail "gpgv rejected $label against the shipped keyring"
   signature_epoch=$(printf '%s\n' "$status" | awk '$2 == "VALIDSIG" {print $5}')
   [[ "$signature_epoch" == "$publication_epoch" ]] \
