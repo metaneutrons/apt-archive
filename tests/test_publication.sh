@@ -378,6 +378,22 @@ cp "$D" "$work/k.deb"; printf 'x' >> "$D"
 probe "veraendertes Paket" "differs from the local file"
 cp "$work/k.deb" "$D"
 
+# Gegenprobe zur ersten: nicht das erste Paket im Index, sondern eines der
+# spaeteren. Eine Nachkontrolle, die nur den ersten Filename-Eintrag holt,
+# meldet hier faelschlich Erfolg.
+# Der Pool-Pfad haengt vom Quellpaketnamen ab, deshalb gesucht statt verdrahtet.
+D2=$(find "$srv/demo/pool" -name 'demo_1.0.0_arm64.deb' -print -quit)
+[ -n "$D2" ] || bad "arm64-Paket im ausgelieferten Pool nicht gefunden"
+cp "$D2" "$work/k2.deb"; printf 'x' >> "$D2"
+probe "veraendertes Paket einer spaeteren Architektur" "differs from the local file"
+cp "$work/k2.deb" "$D2"
+
+DA=$(find "$srv/demo/pool" -name 'demo-doc_1.0.0_all.deb' -print -quit)
+[ -n "$DA" ] || bad "all-Paket im ausgelieferten Pool nicht gefunden"
+cp "$DA" "$work/ka.deb"; printf 'x' >> "$DA"
+probe "veraendertes Architektur-unabhaengiges Paket" "differs from the local file"
+cp "$work/ka.deb" "$DA"
+
 P="$srv/demo/dists/rolling/main/binary-amd64/Packages.gz"
 cp "$P" "$work/k.gz"; printf 'x' >> "$P"
 probe "veraendertes Packages.gz" "does not match its SHA256"
