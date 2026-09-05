@@ -176,6 +176,13 @@ def verify_candidate(manifest: Path, root: Path, work: Path, epoch: int) -> None
     require(len(valid) == 1 and valid[0][2] == data["signing"]["signing_subkey"]
             and valid[0][-1] == data["signing"]["primary_fingerprint"] and int(valid[0][4]) == epoch,
             "detached signature differs from the domain publication")
+    armored = root / (data["domain"]["keyring_package"] + ".asc")
+    require(armored.stat().st_size <= MIB, "armored keyring exceeds its bound")
+    decoded = work / "dearmored.pgp"
+    run(["gpg", "--no-options", "--batch", "--no-autostart", "--homedir", str(work / "gnupg"),
+         "--output", str(decoded), "--dearmor", str(armored)])
+    require(decoded.read_bytes() == (work / "keyring.pgp").read_bytes(),
+            "armored and binary domain keyrings disagree")
     for index in (work / "indexes/SHA256").rglob("*"):
         if index.is_file():
             require(index.read_bytes() == (suite / index.relative_to(work / "indexes/SHA256")).read_bytes(),
@@ -218,6 +225,8 @@ def verified_release(manifest: Path, store: Store, work: Path) -> tuple[dict, di
         if fields[0] in ("pub", "sub"):
             require(fields[1] not in ("r", "e", "d", "i"), "archive key is inactive")
             require(not fields[6] or int(fields[6]) > time.time(), "archive key is expired")
+            require((fields[0] == "pub" and "c" in fields[11] and "s" not in fields[11])
+                    or (fields[0] == "sub" and "s" in fields[11]), "archive key capability differs from its role")
             destination = primary if fields[0] == "pub" else subkeys
         elif fields[0] == "fpr" and destination is not None:
             destination.append(fields[9])

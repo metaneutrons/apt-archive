@@ -235,6 +235,17 @@ keep_versions = 5
         with self.assertRaisesRegex(snapshot.SnapshotError, "link"):
             self.restore()
 
+    def test_candidate_armored_key_and_extra_objects_rejected(self):
+        armored = self.archive / "example-archive-keyring.asc"
+        original = armored.read_bytes()
+        armored.write_bytes(self.run_gpg(["--armor", "--export", self.subkeys[1] + "!"]))
+        with self.assertRaisesRegex(snapshot.SnapshotError, "keyrings disagree"):
+            snapshot.verify_candidate(self.manifest, self.archive, self.scratch(), self.epoch)
+        armored.write_bytes(original)
+        (self.archive / "pool/unindexed.deb").write_bytes(b"not indexed")
+        with self.assertRaisesRegex(snapshot.SnapshotError, "unindexed"):
+            snapshot.verify_candidate(self.manifest, self.archive, self.scratch(), self.epoch)
+
     def test_same_version_different_bytes(self):
         incoming = self.work / "incoming"
         incoming.mkdir()
