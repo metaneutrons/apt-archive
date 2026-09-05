@@ -59,7 +59,9 @@ package to a source repository and a workflow identity happens here, in
 `fetch-packages.sh`, before the package ever enters the archive. An asset on a
 GitHub release only proves that some account was allowed to upload it; the
 attestation binds it to a workflow. **Without an attestation the fetch aborts,
-it does not warn.**
+it does not warn.** A project is therefore publishable the moment its latest
+stable release carries the `.deb` files its manifest entry declares, each one
+attested; a fetch run names whatever is missing.
 
 It also cannot detect that a publication has stopped, beyond the window the
 archive itself declares. That window is `Valid-Until`, set to exactly 180 days
@@ -150,39 +152,6 @@ A project's `packages` list is exhaustive. Every name in it has to appear at
 least once as a matching `.deb` in the stable releases under consideration.
 Optional packages are not silently tolerated; if they are ever needed, they get
 a manifest field of their own.
-
-## Status
-
-Nothing is published yet. The chain is complete and covered by the contract
-suites: `deb.metaneutrons.cc` sits on `deb-metaneutrons-cc`, `deb.snapdog.cc` on
-`deb-snapdog-cc`, both manifests carry the verified public fingerprints, and the
-protected environments `release-metaneutrons.cc` and `release-snapdog.cc` each
-hold the four secrets the workflow needs. The secret primary key stays in the
-vault and is in no CI bundle.
-
-What is still missing sits in the source projects. A project becomes publishable
-the moment its latest stable release carries the `.deb` files its manifest entry
-declares, each with a build provenance attestation. As of 5 September 2026:
-
-| Project | Latest stable release | `.deb` assets | Attested |
-| --- | --- | --- | --- |
-| `aros-tools` | none | — | — |
-| `devserial` | `devserial-v0.1.9` | 2 | yes |
-| `ugos-cli` | `v0.12.0` | 2 | yes |
-| `bups` | `v0.1.1` | none | — |
-| `snapdog` | `v0.27.1` | 4 | no |
-
-This table goes stale on its own. The authoritative answer is a fetch run:
-`scripts/fetch-packages.sh` names exactly what is missing and aborts rather than
-warning.
-
-## Contributing
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for commit conventions, hooks and the
-two rules that hold without exception on any path that publishes.
-
-Security reports go through Private Vulnerability Reporting, not through issues;
-see [`SECURITY.md`](SECURITY.md).
 
 ## License
 
