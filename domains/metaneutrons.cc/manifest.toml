@@ -59,7 +59,17 @@ source_repo = "metaneutrons/ugos-cli"
 packages = ["ugos-cli"]
 # How many releases are kept in the pool. Without a limit it grows without
 # bound and every run downloads everything again.
-keep_versions = 5
+#
+# Two rather than five: ugos-cli attached .deb files to its releases before it
+# attested them. Attestation began with v0.11.3, so v0.11.2 and older carry
+# packages the ingest refuses, and refuses rightly:
+#
+#   AR180 attestation verification failed for ugos-cli_0.11.2_amd64.deb
+#
+# Attestation cannot be added afterwards, it binds to a workflow run. A window
+# of two keeps the ingest on the attested releases and moves past the old ones
+# as the project releases further.
+keep_versions = 2
 
 [[projects]]
 # Repository, crate and Debian package are all called bups here. The glibc
