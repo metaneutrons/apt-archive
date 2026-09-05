@@ -153,9 +153,9 @@ least once as a matching `.deb` in the stable releases under consideration.
 Optional packages are not silently tolerated; if they are ever needed, they get
 a manifest field of their own.
 
-## License
+## Copyright
 
-Copyright © 2026 Fabian Schmieder.
+Copyright © 2026 Fabian Schmieder. All rights reserved.
 
-This repository is licensed under the GNU General Public License version 3; see
+This repository is not open source and carries no licence; see
 [`LICENSE`](LICENSE).
