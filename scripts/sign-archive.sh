@@ -111,8 +111,8 @@ verifier="$script_root/verify-signing-bundle.sh"
 # it by name here rather than guessing later.
 #
 # The practical consequence: to re-sign, an old tree is rendered again with a
-# fresh publication time. Date, Valid-Until and the signature time move
-# dabei gemeinsam vor.
+# fresh publication time. Date, Valid-Until and the signature time then move
+# forward together.
 created=$(gpg --no-options --batch --homedir "$gnupg_home" --with-colons \
   --list-secret-keys --fingerprint | awk -F: -v want="$signing_subkey" '
     $1 == "ssb" { stamp = $6; next }
@@ -164,7 +164,7 @@ chmod 0644 "$armored" "$dearmored" \
 # A detached signature needs the data file as its second argument, a
 # clear-signed one does not. Written out, because a one-liner hides the
 # difference and a wrong call here would silently check nothing.
-verify_signature() {  # $1 = Name, danach gpgv-Argumente
+verify_signature() {  # $1 = label, then gpgv arguments
   local label=$1 status signature_epoch
   shift
   status=$(gpgv --keyring "$dearmored" --status-fd 1 "$@" 2>/dev/null) \

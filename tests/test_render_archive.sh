@@ -91,11 +91,11 @@ done
 o="$work/t1out"
 out=$(run --manifest "$m" --project demo --pool-dir "$p" --output-dir "$o" --publication-epoch $EPOCH)
 if [ $? -ne 0 ]; then bad "$t" "$out"; else
-  check "$t: Poolobjekte"      "$(find "$o/pool" -name '*.deb' | wc -l | tr -d ' ')" "12"
-  check "$t: Poolpfad"         "$([ -f "$o/pool/main/d/demo/demo_2.0.0_amd64.deb" ] && echo ja || echo nein)" "ja"
-  check "$t: Stanzas amd64"    "$(grep -c '^Package:' "$o/dists/rolling/main/binary-amd64/Packages")" "6"
-  check "$t: Stanzas arm64"    "$(grep -c '^Package:' "$o/dists/rolling/main/binary-arm64/Packages")" "6"
-  check "$t: keine Fremdarch"  "$(grep -c 'arm64' "$o/dists/rolling/main/binary-amd64/Packages")" "0"
+  check "$t: pool objects"     "$(find "$o/pool" -name '*.deb' | wc -l | tr -d ' ')" "12"
+  check "$t: pool path"        "$([ -f "$o/pool/main/d/demo/demo_2.0.0_amd64.deb" ] && echo yes || echo no)" "yes"
+  check "$t: stanzas amd64"    "$(grep -c '^Package:' "$o/dists/rolling/main/binary-amd64/Packages")" "6"
+  check "$t: stanzas arm64"    "$(grep -c '^Package:' "$o/dists/rolling/main/binary-arm64/Packages")" "6"
+  check "$t: no foreign arch"  "$(grep -c 'arm64' "$o/dists/rolling/main/binary-amd64/Packages")" "0"
 fi
 
 # ---------------------------------------------------------------- T2
@@ -241,7 +241,7 @@ reject "an unserved architecture is rejected" "does not serve" mk_unknown_arch
 mk_duplicate() {
   local d=$work/r3; mkdir -p "$d/pool"; manifest "$d/m.toml"
   deb "$d/pool" --package demo --version 1.0.0 --architecture amd64
-  cp "$d/pool/demo_1.0.0_amd64.deb" "$d/pool/kopie.deb"
+  cp "$d/pool/demo_1.0.0_amd64.deb" "$d/pool/copy.deb"
   run --manifest "$d/m.toml" --project demo --pool-dir "$d/pool" --output-dir "$d/out" --publication-epoch $EPOCH
 }
 reject "a duplicate identity is rejected" "both provide" mk_duplicate

@@ -72,8 +72,8 @@ missing=$(PATH="$work/bin:$PATH" FAKE_MISSING_DIGEST=1 \
   --project demo --pool-dir "$work/pool-missing" 2>&1)
 missing_status=$?
 if [ "$missing_status" -ne 0 ] && printf '%s' "$missing" | grep -qF 'selected asset carries no digest field'; then
-  pass=$((pass+1)); printf '  ok    fehlendes Digest-Feld wird fail-closed behandelt\n'
-else fail=$((fail+1)); printf '  FAIL  fehlendes Digest-Feld wird fail-closed behandelt\n'; fi
+  pass=$((pass+1)); printf '  ok    a missing digest field is handled fail-closed\n'
+else fail=$((fail+1)); printf '  FAIL  a missing digest field is handled fail-closed\n'; fi
 
 printf '\n  passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
