@@ -411,8 +411,20 @@ check "$t: names every version" \
   "$(grep -c '1\.0\.0, 1\.1\.0, 2\.0\.0' "$page")" "2"
 check "$t: names both architectures" \
   "$(grep -c 'amd64, arm64' "$page")" "2"
-check "$t: carries the source line verbatim" \
-  "$(grep -cF 'deb [signed-by=/usr/share/keyrings/example-archive-keyring.pgp] https://deb.example.invalid rolling main' "$page")" "1"
+# deb822, never the one-line format: one file, one explicit Signed-By.
+check "$t: writes a .sources file, not a .list" \
+  "$(grep -cF '/etc/apt/sources.list.d/deb.example.invalid.sources' "$page")" "1"
+check "$t: uses no one-line source" \
+  "$(grep -cF 'deb [signed-by=' "$page")" "0"
+for field in 'Types: deb' 'URIs: https://deb.example.invalid' 'Suites: rolling' \
+             'Components: main' \
+             'Signed-By: /usr/share/keyrings/example-archive-keyring.pgp'; do
+  check "$t: deb822 carries ${field%%:*}" "$(grep -cF "$field" "$page")" "1"
+done
+# The signed Release announces the architectures; apt intersects that with the
+# host's own. The field would only make every machine fetch a foreign index.
+check "$t: deb822 pins no architecture" \
+  "$(grep -c '^Architectures: ' "$page")" "0"
 check "$t: carries both fingerprints" \
   "$(grep -c '<code>TBD</code>' "$page")" "2"
 # A page that pulls a script, a style sheet or an image makes whoever serves

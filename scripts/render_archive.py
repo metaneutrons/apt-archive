@@ -618,13 +618,25 @@ def landing_page(domain: Domain, binaries: list[Binary], component: str) -> str:
         f"{esc(domain.signing_subkey)}</code></td></tr>",
         "</tbody></table>",
         "<h2>2. Install it and add the source</h2>",
+        # deb822, never the one-line format and never apt-key: one file, one
+        # explicit Signed-By, and no keyring that is trusted for every source.
         "<pre>",
         esc(f"sudo install -m 0644 /tmp/{domain.keyring_package}.pgp"
             f" {domain.keyring_file}"),
         "",
-        esc(f"echo 'deb [signed-by={domain.keyring_file}] "
-            f"{domain.base_url} {domain.suite} {component}' \\"),
-        esc(f"  | sudo tee /etc/apt/sources.list.d/{domain.host}.list >/dev/null"),
+        esc(f"sudo tee /etc/apt/sources.list.d/{domain.host}.sources >/dev/null")
+        + " &lt;&lt;'EOF'",
+        esc("Types: deb"),
+        esc(f"URIs: {domain.base_url}"),
+        esc(f"Suites: {domain.suite}"),
+        esc(f"Components: {component}"),
+        # No Architectures field. The signed Release already announces the
+        # list, and apt intersects it with the host's own; measured against
+        # Debian 13 with i386 added, the source without the field fetches only
+        # amd64, while the field makes every amd64 machine fetch the arm64
+        # index as well.
+        esc(f"Signed-By: {domain.keyring_file}"),
+        esc("EOF"),
         "",
         esc("sudo apt update"),
         "</pre>",
