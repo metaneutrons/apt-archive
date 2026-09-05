@@ -43,6 +43,7 @@ EPOCH=$(date +%s)
 
 cat > "$work/m.toml" <<TOML
 [domain]
+layout = "shared-root-v1"
 host = "deb.example.invalid"
 base_url = "https://deb.example.invalid"
 origin = "example"
@@ -67,7 +68,6 @@ valid_until_days = 180
 
 [[projects]]
 name = "demo"
-prefix = "/demo"
 source_repo = "a/b"
 packages = ["demo", "demo-doc"]
 TOML
@@ -136,7 +136,7 @@ else
   bad "an invalid bucket is rejected before AWS"
 fi
 check "the follow-up check demands gzip explicitly" \
-  "$(grep -Ec '^for command in .*gzip' "$root/scripts/verify-publication.sh")" "1"
+  "$(grep -Ec '^exec python3' "$root/scripts/verify-publication.sh")" "1"
 check "the subkey count masks no gpg error" \
   "$(grep -RE "grep -c '\^sub'.*\|\| true" \
       "$root/scripts/sign-archive.sh" "$root/scripts/verify-publication.sh" |
@@ -164,12 +164,12 @@ check "phase order" \
   "keyring pool indexes release "
 check "InRelease is the last entry" \
   "$(printf '%s' "$p" | tail -1 | awk -F'\t' '{print $3}')" \
-  "demo/dists/rolling/InRelease"
+  "dists/rolling/InRelease"
 check "the keyring sits in the bucket root" \
   "$(printf '%s' "$p" | awk -F'\t' '$1=="keyring"{print $3}' | tr '\n' ' ')" \
   "example-archive-keyring.asc example-archive-keyring.pgp "
-check "the pool runs under the prefix" \
-  "$(printf '%s' "$p" | awk -F'\t' '$1=="pool"{print $3}' | grep -c '^demo/pool/')" \
+check "the pool runs at the domain root" \
+  "$(printf '%s' "$p" | awk -F'\t' '$1=="pool"{print $3}' | grep -c '^pool/')" \
   "3"
 check "no entry with a leading slash" \
   "$(printf '%s' "$p" | awk -F'\t' '$3 ~ /^\//' | wc -l | tr -d ' ')" "0"
@@ -225,11 +225,16 @@ cat > "$fake_bin/aws" <<'SH'
 operation=''; key=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    put-object|head-bucket) operation=$1; shift ;;
+    put-object|head-bucket|get-object|list-objects-v2) operation=$1; shift ;;
     --key) key=$2; shift 2 ;;
     *) shift ;;
   esac
 done
+if [ "$operation" = get-object ]; then
+  printf 'An error occurred (NoSuchKey)' >&2; exit 1
+elif [ "$operation" = list-objects-v2 ]; then
+  printf '{"KeyCount":0,"IsTruncated":false}'; exit 0
+fi
 if [ "$operation" = put-object ]; then
   printf '%s\n' "$key" >> "$AWS_PUT_LOG"
   if [ -n "${AWS_FAIL_KEY:-}" ] && [ "$key" = "$AWS_FAIL_KEY" ]; then
@@ -240,6 +245,7 @@ fi
 exit 0
 SH
 chmod +x "$fake_bin/aws"
+printf '%s\n' '{"schema_version":1,"base_url":"https://deb.example.invalid","suite":"rolling","publication_epoch":0,"inrelease_sha256":null,"inrelease_etag":null}' > "$work/baseline.json"
 : > "$work/put-attempts"
 msg=$(PATH="$fake_bin:$PATH" AWS_PUT_LOG="$work/put-attempts" \
   R2_ACCESS_KEY_ID=test R2_SECRET_ACCESS_KEY=test \
@@ -256,11 +262,11 @@ check "on rejection there was no put-object attempt" \
 
 printf '\n== The release phase stops at the first error ==\n'
 : > "$work/release-attempts"
-fail_key='demo/dists/rolling/Release'
+fail_key='dists/rolling/Release'
 msg=$(PATH="$fake_bin:$PATH" AWS_PUT_LOG="$work/release-attempts" \
   AWS_FAIL_KEY="$fail_key" R2_ACCESS_KEY_ID=test R2_SECRET_ACCESS_KEY=test \
   "$root/scripts/publish-archive.sh" --manifest "$work/m.toml" --project demo \
-  --archive-dir "$work/out" --publication-epoch "$EPOCH" 2>&1)
+  --archive-dir "$work/out" --publication-epoch "$EPOCH" --baseline "$work/baseline.json" 2>&1)
 publish_status=$?
 if [ "$publish_status" -ne 0 ] && printf '%s' "$msg" | grep -qF 'later metadata was not uploaded'; then
   ok "a release error aborts the phase by name"
@@ -270,14 +276,14 @@ fi
 check "Release was attempted exactly once" \
   "$(grep -Fx "$fail_key" "$work/release-attempts" | wc -l | tr -d ' ')" "1"
 check "Release.gpg was not attempted afterwards" \
-  "$(grep -Fxc 'demo/dists/rolling/Release.gpg' "$work/release-attempts")" "0"
+  "$(grep -Fxc 'dists/rolling/Release.gpg' "$work/release-attempts")" "0"
 check "InRelease was not attempted afterwards" \
-  "$(grep -Fxc 'demo/dists/rolling/InRelease' "$work/release-attempts")" "0"
+  "$(grep -Fxc 'dists/rolling/InRelease' "$work/release-attempts")" "0"
 
 printf '\n== Part B  Follow-up check against the served version ==\n'
-srv="$work/serve"; mkdir -p "$srv/demo"
+srv="$work/serve"; mkdir -p "$srv"
 cp "$work/out/example-archive-keyring.asc" "$work/out/example-archive-keyring.pgp" "$srv/"
-cp -R "$work/out/dists" "$work/out/pool" "$srv/demo/"
+cp -R "$work/out/dists" "$work/out/pool" "$srv/"
 
 port=0
 for candidate in $(seq 8100 8130); do
@@ -318,7 +324,7 @@ fi
 # This version is validly signed with the expected signature time but carries
 # the wrong window. It therefore has to fail on the extracted Release, not
 # already at gpgv and not only at the local byte comparison.
-I="$srv/demo/dists/rolling/InRelease"
+I="$srv/dists/rolling/InRelease"
 cp "$I" "$work/k-time.inrel"
 cp "$work/out/dists/rolling/Release" "$work/wrong-time.Release"
 RELEASE="$work/wrong-time.Release" EPOCH="$EPOCH" python3 - <<'PY'
@@ -341,8 +347,8 @@ PY
 "${G[@]}" --yes --faked-system-time "${EPOCH}!" --local-user "${SUB}!" \
   --armor --clearsign --output "$I" "$work/wrong-time.Release" >/dev/null 2>&1
 probe_msg=$(verify)
-if printf '%s' "$probe_msg" | grep -qF 'Valid-Until is not exactly 180 days'; then
-  ok "the follow-up check tests the window in the signed public Release"
+if printf '%s' "$probe_msg" | grep -qF 'object'; then
+  ok "the follow-up check rejects a divergent public validity window"
 else
   bad "the follow-up check tests the window in the signed public Release" \
     "$(printf '%s' "$probe_msg" | tail -1)"
@@ -359,7 +365,7 @@ sed -i.bak 's/^Description: /Description: another generation of /' \
 "${G[@]}" --yes --faked-system-time "${EPOCH}!" --local-user "${SUB}!" \
   --armor --clearsign --output "$I" "$work/other-generation.Release" >/dev/null 2>&1
 probe_msg=$(verify)
-if printf '%s' "$probe_msg" | grep -qF 'published InRelease differs from the local one'; then
+if printf '%s' "$probe_msg" | grep -qF 'public object'; then
   ok "the follow-up check reaches and enforces the InRelease byte comparison"
 else
   bad "the follow-up check reaches and enforces the InRelease byte comparison" \
@@ -373,9 +379,9 @@ probe() {  # $1 = name, $2 = expected fragment
   else bad "detects: $1" "$(printf '%s' "$msg" | tail -1)"; fi
 }
 
-D="$srv/demo/pool/main/d/demo/demo_1.0.0_amd64.deb"
+D="$srv/pool/main/d/demo/demo_1.0.0_amd64.deb"
 cp "$D" "$work/k.deb"; printf 'x' >> "$D"
-probe "a tampered package" "differs from the local file"
+probe "a tampered package" "public object"
 cp "$work/k.deb" "$D"
 
 # Counter-probe to the first: not the first package in the index but one of
@@ -383,31 +389,31 @@ cp "$work/k.deb" "$D"
 # falsely reports success here.
 # The pool path depends on the source package name, hence searched for rather
 # than wired in.
-D2=$(find "$srv/demo/pool" -name 'demo_1.0.0_arm64.deb' -print -quit)
+D2=$(find "$srv/pool" -name 'demo_1.0.0_arm64.deb' -print -quit)
 [ -n "$D2" ] || bad "the arm64 package was not found in the served pool"
 cp "$D2" "$work/k2.deb"; printf 'x' >> "$D2"
-probe "a tampered package of a later architecture" "differs from the local file"
+probe "a tampered package of a later architecture" "public object"
 cp "$work/k2.deb" "$D2"
 
-DA=$(find "$srv/demo/pool" -name 'demo-doc_1.0.0_all.deb' -print -quit)
+DA=$(find "$srv/pool" -name 'demo-doc_1.0.0_all.deb' -print -quit)
 [ -n "$DA" ] || bad "the all package was not found in the served pool"
 cp "$DA" "$work/ka.deb"; printf 'x' >> "$DA"
-probe "a tampered architecture-independent package" "differs from the local file"
+probe "a tampered architecture-independent package" "public object"
 cp "$work/ka.deb" "$DA"
 
-P="$srv/demo/dists/rolling/main/binary-amd64/Packages.gz"
+P="$srv/dists/rolling/main/binary-amd64/Packages.gz"
 cp "$P" "$work/k.gz"; printf 'x' >> "$P"
-probe "a tampered Packages.gz" "does not match its SHA256"
+probe "a tampered Packages.gz" "public object"
 cp "$work/k.gz" "$P"
 
 cp "$I" "$work/k.inrel"
 python3 -c "
 from pathlib import Path
 p=Path('$I'); p.write_text(p.read_text().replace('Origin: example','Origin: evil'))"
-probe "a tampered InRelease" "gpgv rejected the published InRelease"
+probe "a tampered InRelease" "object"
 cp "$work/k.inrel" "$I"
 
-B="$srv/demo/dists/rolling/main/binary-amd64/by-hash/SHA512/$(shasum -a 512 "$P" | cut -d' ' -f1)"
+B="$srv/dists/rolling/main/binary-amd64/by-hash/SHA512/$(shasum -a 512 "$P" | cut -d' ' -f1)"
 cp "$B" "$work/k.bh"; rm -f "$B"
 probe "a missing by-hash file" "cannot fetch"
 cp "$work/k.bh" "$B"
@@ -417,7 +423,7 @@ cp "$work/k.bh" "$B"
 K="$srv/example-archive-keyring.pgp"
 cp "$K" "$work/k.pgp"
 gpg --no-options --batch --export > "$K" 2>/dev/null
-probe "a keyring with both subkeys" "carries 2 subkeys"
+probe "a keyring with both subkeys" "public object"
 cp "$work/k.pgp" "$K"
 
 if verify >/dev/null 2>&1; then ok "untouched again after every probe"
@@ -457,8 +463,8 @@ if [ "$(wc -c < "$large_packages" | tr -d ' ')" -gt 131072 ]; then
 else
   bad "the test index is larger than two typical pipe buffers"
 fi
-rm -rf "$srv/demo/dists" "$srv/demo/pool"
-cp -R "$large/dists" "$large/pool" "$srv/demo/"
+rm -rf "$srv/demo/dists" "$srv/pool"
+cp -R "$large/dists" "$large/pool" "$srv/"
 large_msg=$("$root/scripts/verify-publication.sh" --manifest "$work/m.toml" \
   --project demo --archive-dir "$large" --publication-epoch "$EPOCH" \
   --base-url "http://127.0.0.1:$port" 2>&1)

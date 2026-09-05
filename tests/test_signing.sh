@@ -56,6 +56,7 @@ check "two signing subkeys" "${#SUBS[@]}" "2"
 manifest() {  # $1 = target, $2 = primary, $3 = subkey
   cat > "$1" <<TOML
 [domain]
+layout = "shared-root-v1"
 host = "deb.example.invalid"
 base_url = "https://deb.example.invalid"
 origin = "example"
@@ -80,7 +81,6 @@ valid_until_days = 180
 
 [[projects]]
 name = "demo"
-prefix = "/demo"
 source_repo = "a/b"
 packages = ["demo"]
 TOML

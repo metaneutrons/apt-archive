@@ -3,6 +3,7 @@
 # a repository of its own without any code travelling with it.
 
 [domain]
+layout = "shared-root-v1"
 host = "deb.metaneutrons.cc"
 base_url = "https://deb.metaneutrons.cc"
 origin = "metaneutrons"
@@ -32,7 +33,6 @@ valid_until_days = 180
 # neglected project therefore does not drag the others down with it.
 [[projects]]
 name = "aros-tools"
-prefix = "/aros-tools"
 source_repo = "metaneutrons/aros-tools"
 packages = ["aros-tools"]
 # How many releases are kept in the pool. Without a limit it grows without
@@ -45,7 +45,6 @@ keep_versions = 5
 # against this manifest, select_assets.py checks the package against the release
 # assets.
 name = "devserial"
-prefix = "/devserial"
 source_repo = "metaneutrons/devserial"
 packages = ["devserial"]
 # How many releases are kept in the pool. Without a limit it grows without
@@ -54,7 +53,6 @@ keep_versions = 5
 
 [[projects]]
 name = "ugos-cli"
-prefix = "/ugos-cli"
 source_repo = "metaneutrons/ugos-cli"
 packages = ["ugos-cli"]
 # How many releases are kept in the pool. Without a limit it grows without
@@ -66,7 +64,6 @@ keep_versions = 5
 # packages are built natively per architecture in a digest-pinned Bookworm
 # container, so the file name carries amd64 or arm64 and no Debian revision.
 name = "bups"
-prefix = "/bups"
 source_repo = "metaneutrons/bups"
 packages = ["bups"]
 # How many releases are kept in the pool. Without a limit it grows without

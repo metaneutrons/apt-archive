@@ -68,7 +68,7 @@ jobs:
           with open(path, "rb") as handle:
               data = tomllib.load(handle)
           for section, keys in (
-              ("domain", ("host", "base_url", "origin", "keyring_package", "keyring_file")),
+              ("domain", ("host", "base_url", "layout", "origin", "keyring_package", "keyring_file")),
               ("signing", ("primary_fingerprint", "signing_subkey")),
               ("publication", ("r2_bucket", "r2_account_id")),
               ("release", ("suite", "codename", "components", "architectures",
@@ -81,7 +81,7 @@ jobs:
           if not projects:
               raise SystemExit(f"{path}: no project declared")
           for project in projects:
-              for key in ("name", "prefix", "source_repo", "packages", "keep_versions"):
+              for key in ("name", "source_repo", "packages", "keep_versions"):
                   if key not in project:
                       raise SystemExit(f"{path}: project {project.get('name')!r} lacks {key}")
           print(f"{path}: {len(projects)} project(s)")
@@ -102,6 +102,9 @@ jobs:
 
       - name: Publication contract
         run: bash tests/test_publication.sh
+
+      - name: Signed shared-domain transaction contract
+        run: python3 tests/test_domain_snapshot.py
 
   container:
     name: The pinned renderer container
@@ -134,7 +137,7 @@ jobs:
           t = p.read_text()
           # Exactly one project whose packages match the test files.
           t = re.split(r"^\[\[projects\]\]", t, flags=re.M)[0]
-          t += ('[[projects]]\nname = "demo"\nprefix = "/demo"\n'
+          t += ('[[projects]]\nname = "demo"\n'
                 'source_repo = "a/b"\npackages = ["demo", "demo-doc"]\n'
                 'keep_versions = 5\n')
           p.write_text(t)
@@ -147,6 +150,9 @@ jobs:
             --publication-epoch 1700000000
           diff -r "$work/container" "$work/local"
           echo 'container and local output are identical'
+
+      - name: Two-project archive with real Debian 12 and 13 APT clients
+        run: python3 tests/integration_apt.py
 
   commit-hygiene:
     name: Commit hygiene

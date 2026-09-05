@@ -1,6 +1,6 @@
 name: Publish
 
-# One run per domain and project.
+# One import per project; every run publishes the whole domain inventory.
 #
 # repository_dispatch is how a project knocks after its release, and how the
 # external watchdog asks for a re-signature. No cron: GitHub switches scheduled
@@ -17,8 +17,8 @@ on:
           - metaneutrons.cc
           - snapdog.cc
       project:
-        description: Project name from the manifest
-        required: true
+        description: Project name from the manifest (empty = re-sign the whole inventory)
+        required: false
         type: string
   repository_dispatch:
     types: [publish-archive]
@@ -67,7 +67,7 @@ jobs:
             metaneutrons.cc|snapdog.cc) ;;
             *) echo "::error::unknown domain '$IN_DOMAIN'"; exit 1 ;;
           esac
-          printf '%s' "$IN_PROJECT" | grep -Eq '^[a-z0-9][a-z0-9-]{1,63}$' \
+          printf '%s' "$IN_PROJECT" | grep -Eq '^([a-z0-9][a-z0-9-]{1,63})?$' \
             || { echo "::error::unsafe project name"; exit 1; }
           manifest="domains/${IN_DOMAIN}/manifest.toml"
           [ -f "$manifest" ] || { echo "::error::no manifest for $IN_DOMAIN"; exit 1; }
@@ -76,7 +76,7 @@ jobs:
           with open(os.environ["MANIFEST"], "rb") as handle:
               data = tomllib.load(handle)
           names = [p.get("name") for p in data.get("projects", [])]
-          if os.environ["PROJECT"] not in names:
+          if os.environ["PROJECT"] and os.environ["PROJECT"] not in names:
               raise SystemExit(
                   f"project {os.environ['PROJECT']!r} is not in the manifest; "
                   f"declared: {', '.join(map(str, names))}")
@@ -140,6 +140,7 @@ jobs:
           persist-credentials: false
 
       - name: Fetch the packages and verify their attestation
+        if: needs.preflight.outputs.project != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -147,7 +148,25 @@ jobs:
           ./scripts/fetch-packages.sh \
             --manifest "domains/${{ needs.preflight.outputs.domain }}/manifest.toml" \
             --project "${{ needs.preflight.outputs.project }}" \
-            --pool-dir "$RUNNER_TEMP/pool"
+            --pool-dir "$RUNNER_TEMP/incoming"
+
+      - name: Restore the signed domain and merge only the requested import
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_EC2_METADATA_DISABLED: 'true'
+          IN_PROJECT: ${{ needs.preflight.outputs.project }}
+        run: |
+          set -euo pipefail
+          import_args=()
+          if [[ -n "$IN_PROJECT" ]]; then
+            import_args=(--project "$IN_PROJECT" --incoming-pool "$RUNNER_TEMP/incoming")
+          fi
+          python3 scripts/domain_snapshot.py prepare \
+            --manifest "domains/${{ needs.preflight.outputs.domain }}/manifest.toml" \
+            --output-pool "$RUNNER_TEMP/pool" --baseline "$RUNNER_TEMP/baseline.json" \
+            "${import_args[@]}"
 
       - name: Render the archive
         run: |
@@ -160,7 +179,6 @@ jobs:
           printf 'PUBLICATION_EPOCH=%s\n' "$publication_epoch" >> "$GITHUB_ENV"
           ./scripts/render-archive.sh \
             --manifest "domains/${{ needs.preflight.outputs.domain }}/manifest.toml" \
-            --project "${{ needs.preflight.outputs.project }}" \
             --pool-dir "$RUNNER_TEMP/pool" \
             --output-dir "$RUNNER_TEMP/archive" \
             --publication-epoch "$publication_epoch"
@@ -192,8 +210,8 @@ jobs:
           set -euo pipefail
           ./scripts/publish-archive.sh \
             --manifest "domains/${{ needs.preflight.outputs.domain }}/manifest.toml" \
-            --project "${{ needs.preflight.outputs.project }}" \
             --archive-dir "$RUNNER_TEMP/archive" \
+            --baseline "$RUNNER_TEMP/baseline.json" \
             --publication-epoch "$PUBLICATION_EPOCH"
 
       - name: Verify what a client receives
@@ -203,6 +221,5 @@ jobs:
           # what gets served.
           ./scripts/verify-publication.sh \
             --manifest "domains/${{ needs.preflight.outputs.domain }}/manifest.toml" \
-            --project "${{ needs.preflight.outputs.project }}" \
             --archive-dir "$RUNNER_TEMP/archive" \
             --publication-epoch "$PUBLICATION_EPOCH"

@@ -17,6 +17,7 @@ manifest() {  # $1 = target file, $2... = additional lines
   local out=$1; shift
   cat > "$out" <<TOML
 [domain]
+layout = "shared-root-v1"
 host = "deb.example.invalid"
 base_url = "https://deb.example.invalid"
 origin = "example"
@@ -41,7 +42,6 @@ valid_until_days = 180
 
 [[projects]]
 name = "demo"
-prefix = "/demo"
 source_repo = "example/demo"
 packages = ["demo", "demo-extras"]
 TOML
@@ -384,11 +384,11 @@ else
 fi
 
 prefix_manifest="$work/unsafe-prefix.toml"; manifest "$prefix_manifest"
-sed -i.bak 's|prefix = "/demo"|prefix = "/demo\\nValid-Until: Thu, 01 Jan 2099 00:00:00 +0000"|' \
-  "$prefix_manifest"
+printf 'prefix = "/demo\\nValid-Until: Thu, 01 Jan 2099 00:00:00 +0000"\n' \
+  >> "$prefix_manifest"
 msg=$(run --manifest "$prefix_manifest" --project demo --pool-dir "$p" \
         --output-dir "$work/unsafe-prefix" --publication-epoch $EPOCH 2>&1)
-if printf '%s' "$msg" | grep -qF 'unsafe prefix'; then
+if printf '%s' "$msg" | grep -qF 'project prefixes are forbidden'; then
   ok "$t: a line break in the prefix"
 else
   bad "$t: a line break in the prefix" "$(printf '%s' "$msg" | head -1)"

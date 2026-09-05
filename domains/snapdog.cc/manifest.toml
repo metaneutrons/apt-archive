@@ -1,4 +1,5 @@
 [domain]
+layout = "shared-root-v1"
 host = "deb.snapdog.cc"
 base_url = "https://deb.snapdog.cc"
 origin = "SnapDogRocks"
@@ -26,7 +27,6 @@ valid_until_days = 180
 # several packages per architecture and several versions at once.
 [[projects]]
 name = "snapdog"
-prefix = "/snapdog"
 source_repo = "SnapDogRocks/snapdog"
 packages = ["snapdog", "snapdog-client"]
 # How many releases are kept in the pool. Without a limit it grows without
