@@ -465,7 +465,7 @@ else
   bad "the test index is larger than two typical pipe buffers"
 fi
 rm -rf "$srv/demo/dists" "$srv/pool"
-# index.html mit austauschen: es nennt die Pakete, gehoert also zu diesem Baum.
+# Swap index.html along with it: it names the packages, so it belongs to this tree.
 cp -R "$large/dists" "$large/pool" "$srv/"
 cp "$large/index.html" "$srv/"
 large_msg=$("$root/scripts/verify-publication.sh" --manifest "$work/m.toml" \
