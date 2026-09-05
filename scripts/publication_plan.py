@@ -22,11 +22,13 @@ import tomllib
 from pathlib import Path
 from typing import NoReturn
 
-from render_archive import load_domain
+from render_archive import LANDING_PAGE_NAME, load_domain
 from release_time import ReleaseTimeError, validate_release_time
 
 # Every object is served relative to the domain root.
-PHASES = ("keyring", "pool", "indexes", "release")
+# The page names package versions, so it goes up after the pool and the
+# indexes exist and before the signed metadata flips the archive over.
+PHASES = ("keyring", "pool", "indexes", "page", "release")
 
 RELEASE_FILES = ("Release", "Release.gpg", "InRelease")
 
@@ -34,6 +36,7 @@ CONTENT_TYPES = {
     ".deb": "application/vnd.debian.binary-package",
     ".gz": "application/gzip",
     ".asc": "text/plain; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
 }
 
 
@@ -124,6 +127,11 @@ def plan(archive: Path, meta: dict) -> list[dict]:
     release_paths = {dists / name for name in RELEASE_FILES}
     for path in sorted(p for p in dists.rglob("*") if p.is_file() and p not in release_paths):
         add("indexes", path, path.relative_to(archive).as_posix())
+
+    page = archive / LANDING_PAGE_NAME
+    if not page.is_file():
+        fail(f"the landing page is missing: {page}")
+    add("page", page, LANDING_PAGE_NAME)
 
     # Release last, and InRelease last of all: it is the file apt reads first,
     # so it is the one that must never point forward.

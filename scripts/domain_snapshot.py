@@ -24,7 +24,7 @@ import tomllib
 
 from publication_target import load_target
 from release_time import validate_release_time
-from render_archive import Binary, collect, load_domain, stanza
+from render_archive import LANDING_PAGE_NAME, Binary, collect, load_domain, stanza
 
 MIB = 1024 * 1024
 MAX_STATE = 16 * MIB
@@ -189,6 +189,10 @@ def verify_candidate(manifest: Path, root: Path, work: Path, epoch: int) -> None
                     "mutable index differs from its signed immutable identity")
     expected = {b.pool_path for b in binaries}
     expected.update(data["domain"]["keyring_package"] + suffix for suffix in (".asc", ".pgp"))
+    # The landing page is an unsigned convenience object at the archive root.
+    # It belongs in the inventory so that the candidate tree stays exhaustively
+    # accounted for; an unexpected file must still be a finding.
+    expected.add(LANDING_PAGE_NAME)
     expected.update(f"dists/{domain.suite}/{name}" for name in ("Release", "Release.gpg", "InRelease"))
     for index in (work / "indexes/SHA256").rglob("*"):
         if not index.is_file():
