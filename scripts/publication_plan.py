@@ -22,10 +22,10 @@ import tomllib
 from pathlib import Path
 from typing import NoReturn
 
+from render_archive import load_domain
 from release_time import ReleaseTimeError, validate_release_time
 
-# The keyring is served at domain level, not per project, so it lands in the
-# bucket root while everything else lands under the project prefix.
+# Every object is served relative to the domain root.
 PHASES = ("keyring", "pool", "indexes", "release")
 
 RELEASE_FILES = ("Release", "Release.gpg", "InRelease")
@@ -56,7 +56,8 @@ def content_type(path: Path, phase: str) -> str:
     return "text/plain; charset=utf-8"
 
 
-def load(manifest: Path, project: str) -> dict:
+def load(manifest: Path, project: str | None = None) -> dict:
+    load_domain(manifest, project)
     try:
         with manifest.open("rb") as handle:
             data = tomllib.load(handle)
@@ -75,13 +76,6 @@ def load(manifest: Path, project: str) -> dict:
     projects = data.get("projects")
     if not isinstance(projects, list):
         fail(f"{manifest}: [[projects]] is missing")
-    matches = [p for p in projects if isinstance(p, dict) and p.get("name") == project]
-    if len(matches) != 1:
-        known = ", ".join(sorted(str(p.get("name")) for p in projects if isinstance(p, dict)))
-        fail(f"{manifest}: project {project!r} is not declared exactly once; declared: {known}")
-    prefix = matches[0].get("prefix")
-    if not isinstance(prefix, str) or not prefix.startswith("/") or ".." in prefix:
-        fail(f"{manifest}: project {project!r} has an unsafe prefix {prefix!r}")
 
     return {
         "bucket": need("publication", "r2_bucket"),
@@ -90,7 +84,7 @@ def load(manifest: Path, project: str) -> dict:
         "base_url": need("domain", "base_url"),
         "keyring_package": need("domain", "keyring_package"),
         "suite": need("release", "suite"),
-        "prefix": prefix.lstrip("/"),
+
     }
 
 
@@ -125,17 +119,17 @@ def plan(archive: Path, meta: dict) -> list[dict]:
     if not pool.is_dir():
         fail(f"the pool is missing: {pool}")
     for path in sorted(p for p in pool.rglob("*") if p.is_file()):
-        add("pool", path, f"{meta['prefix']}/{path.relative_to(archive).as_posix()}")
+        add("pool", path, path.relative_to(archive).as_posix())
 
     release_paths = {dists / name for name in RELEASE_FILES}
     for path in sorted(p for p in dists.rglob("*") if p.is_file() and p not in release_paths):
-        add("indexes", path, f"{meta['prefix']}/{path.relative_to(archive).as_posix()}")
+        add("indexes", path, path.relative_to(archive).as_posix())
 
     # Release last, and InRelease last of all: it is the file apt reads first,
     # so it is the one that must never point forward.
     for name in ("Release", "Release.gpg", "InRelease"):
         path = dists / name
-        add("release", path, f"{meta['prefix']}/{path.relative_to(archive).as_posix()}")
+        add("release", path, path.relative_to(archive).as_posix())
 
     seen: dict[str, str] = {}
     for entry in entries:
@@ -148,7 +142,7 @@ def plan(archive: Path, meta: dict) -> list[dict]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--project", required=True)
+    parser.add_argument("--project", help="optional request identity, not an upload prefix")
     parser.add_argument("--archive-dir", type=Path, required=True)
     parser.add_argument("--publication-epoch", type=int, required=True)
     parser.add_argument("--format", choices=("tsv", "json"), default="tsv")
@@ -160,6 +154,7 @@ def main() -> None:
         fail(f"archive-dir must be a real directory: {args.archive_dir}")
 
     meta = load(args.manifest, args.project)
+    meta["publication_epoch"] = args.publication_epoch
     archive = args.archive_dir.resolve()
     entries = plan(archive, meta)
     try:

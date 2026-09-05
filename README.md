@@ -96,7 +96,7 @@ domains/
   metaneutrons.cc/manifest.toml   projects, bucket, subkey, base URL
   snapdog.cc/manifest.toml
 scripts/                          renderer, fetch, sign, publish, verify
-tests/                            five contract suites, 179 assertions
+tests/                            renderer, trust, transaction and publication contracts
 ```
 
 The renderer and the workflows are shared and read the manifest. If a domain
@@ -109,9 +109,27 @@ publication order is chosen and what the follow-up check actually proves.
 
 ## Decisions
 
-The layout is one archive per project under its own prefix, not a shared
-`dists/` with components. A shared archive would have a shared `Valid-Until`
-clock, and one neglected project would drag every other one down with it.
+Each domain serves one shared archive at its root: suite `rolling`, component
+`main`, one `Release` and one clock. Projects own disjoint package names, not
+URL prefixes. Every publication refreshes the whole archive's validity, including
+unchanged packages. Package activity never determines expiry.
+
+Before an import, the publisher restores the previous **signed domain snapshot**
+from the authoritative object store. It checks the pinned primary/domain subkey,
+every retained payload, both index hashes and `archive-state.json`. Only the
+requested project's release assets are fetched from GitHub; other projects keep
+their exact bytes. An empty project request refreshes the existing inventory
+without any release lookup. A missing `InRelease` permits bootstrap only in a
+genuinely empty bucket, never after an authorization error or partial upload.
+
+The pre-write gate rejects changed ownership, version rollback, same-version
+replacement, stale clocks, changed generations and immutable-object collisions.
+Immutable objects use conditional PUTs; `InRelease` is committed last with an
+ETag condition. Domain-scoped workflow concurrency remains mandatory. **Multiple
+object PUTs are not an atomic transaction**: failure can leave unreferenced
+objects or inconsistent detached metadata. Never delete objects or overwrite a
+conflict to force a retry; restore and qualify a fresh transaction. See the
+[transaction and recovery contract](scripts/README.md#shared-domain-transactions).
 
 `Suite` and `Codename` are `rolling`. In the Debian world `stable` is a term of
 art for the current Debian release and is misleading for a rolling archive of
@@ -133,7 +151,7 @@ for a re-signature, both through `repository_dispatch`.
 ```
 # /etc/apt/sources.list.d/metaneutrons.sources
 Types: deb
-URIs: https://deb.metaneutrons.cc/<project>
+URIs: https://deb.metaneutrons.cc
 Suites: rolling
 Components: main
 Signed-By: /usr/share/keyrings/metaneutrons-archive-keyring.pgp

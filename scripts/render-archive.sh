@@ -36,7 +36,7 @@ while (($#)); do
     *) fail "unknown argument: $1" ;;
   esac
 done
-for name in manifest project pool_dir output_dir publication_epoch; do
+for name in manifest pool_dir output_dir publication_epoch; do
   [[ -n "${!name}" ]] || fail "--${name//_/-} is required"
 done
 [[ -f "$manifest" && ! -L "$manifest" ]] || fail 'manifest must be a regular file'
@@ -47,12 +47,13 @@ done
 manifest_dir=$(unset CDPATH; cd -- "$(dirname -- "$manifest")" && pwd -P)
 manifest_name=$(basename -- "$manifest")
 
-args=(--manifest "/manifest/$manifest_name" --project "$project" --pool-dir /pool
+args=(--manifest "/manifest/$manifest_name" --pool-dir /pool
       --output-dir /out/archive --publication-epoch "$publication_epoch")
+[[ -n "$project" ]] && args+=(--project "$project")
 [[ -n "$component" ]] && args+=(--component "$component")
 
 if [[ "${AR_RENDER_LOCAL:-}" == 1 ]]; then
-  exec python3 "$renderer" --manifest "$manifest" --project "$project" \
+  exec python3 "$renderer" --manifest "$manifest" ${project:+--project "$project"} \
     --pool-dir "$pool_dir" --output-dir "$output_dir" \
     --publication-epoch "$publication_epoch" ${component:+--component "$component"}
 fi

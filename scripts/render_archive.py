@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a deterministic APT archive for one project of one archive domain.
+"""Render a deterministic APT archive for all published projects of one domain.
 
 Only the Python standard library is used, so the rendered bytes do not depend
 on the package set of a GitHub-hosted runner.  Signing happens outside; this
@@ -10,8 +10,7 @@ The Debian control reader is carried over from `metaneutrons/aros-tools`
 use here.  Everything above it is new: that renderer handled exactly one
 package, one version, one hard-coded pool path and exactly two architectures.
 
-Layout produced under `--output-dir`, which is the archive root of one project
-prefix, for example `https://deb.metaneutrons.cc/aros-tools`:
+Layout produced under `--output-dir`, the domain root (no project prefix):
 
     pool/<component>/<p>/<source>/<file>.deb
     dists/<suite>/<component>/binary-<arch>/Packages
@@ -27,6 +26,7 @@ import bz2
 import gzip
 import hashlib
 import io
+import json
 import lzma
 import os
 import functools
@@ -49,7 +49,6 @@ ARCHITECTURE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 SUITE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 COMPONENT = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 PROJECT_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
-PREFIX = re.compile(r"^/[a-z0-9][a-z0-9._/-]*[a-z0-9]$")
 HEX40 = re.compile(r"^[0-9A-Fa-f]{40}$")
 # Anything written into a Release line. A line break in it appends an
 # arbitrary further line to the file.
@@ -232,6 +231,7 @@ def control_text(package: Path) -> str:
 
 def parse_fields(text: str, origin: str) -> dict[str, str]:
     fields: dict[str, str] = {}
+    names: set[str] = set()
     current: str | None = None
     for line in text.splitlines():
         if line.startswith((" ", "\t")):
@@ -242,8 +242,9 @@ def parse_fields(text: str, origin: str) -> dict[str, str]:
         if ": " not in line:
             fail(f"{origin}: Debian control metadata has a malformed field")
         current, value = line.split(": ", 1)
-        if not re.fullmatch(r"[A-Za-z0-9-]+", current) or current in fields:
+        if not re.fullmatch(r"[A-Za-z0-9-]+", current) or current.casefold() in names:
             fail(f"{origin}: Debian control field is unsafe or repeated: {current!r}")
+        names.add(current.casefold())
         fields[current] = value
     return fields
 
@@ -251,7 +252,7 @@ def parse_fields(text: str, origin: str) -> dict[str, str]:
 class Domain:
     """The parts of a domain manifest the renderer needs, already validated."""
 
-    def __init__(self, data: dict, project_name: str, manifest_path: Path) -> None:
+    def __init__(self, data: dict, project_name: str | None, manifest_path: Path) -> None:
         # Types are checked, never coerced. `bool("false")` is True and
         # `int(True)` is 1, so coercing manifest input would turn a typo into a
         # silently wrong archive: a disabled acquire_by_hash read as enabled,
@@ -279,17 +280,24 @@ class Domain:
                     )
             return value
 
-        if not RELEASE_FIELD.fullmatch(project_name) or not PROJECT_NAME.fullmatch(project_name):
+        if project_name is not None and not PROJECT_NAME.fullmatch(project_name):
             fail(f"{manifest_path}: project name must be one safe printable field")
 
         self.origin = need("domain", "origin", str)
         self.host = need("domain", "host", str)
+        self.base_url = need("domain", "base_url", str)
         self.suite = need("release", "suite", str)
         self.codename = need("release", "codename", str)
         self.components = need_strings("release", "components")
         self.architectures = need_strings("release", "architectures")
         self.acquire_by_hash = need("release", "acquire_by_hash", bool)
         self.valid_until_days = need("release", "valid_until_days", int)
+        if not re.fullmatch(r"[a-z0-9]+(?:[.-][a-z0-9]+)*", self.host):
+            fail(f"{manifest_path}: host must be a DNS hostname")
+        if self.base_url != f"https://{self.host}":
+            fail(f"{manifest_path}: base_url must be the HTTPS domain root without a path")
+        if need("domain", "layout", str) != "shared-root-v1":
+            fail(f"{manifest_path}: domain layout must be shared-root-v1")
 
         # Every value reaching a Release line must be one printable line.
         for label, value in (("origin", self.origin), ("host", self.host)):
@@ -320,37 +328,44 @@ class Domain:
         projects = data.get("projects")
         if not isinstance(projects, list) or not projects:
             fail(f"{manifest_path}: [[projects]] is missing")
-        matches = [p for p in projects if isinstance(p, dict) and p.get("name") == project_name]
-        if len(matches) != 1:
+        self.projects: dict[str, dict] = {}
+        self.owners: dict[str, dict] = {}
+        for project in projects:
+            if not isinstance(project, dict):
+                fail(f"{manifest_path}: project must be a table")
+            name = project.get("name")
+            if not isinstance(name, str) or not PROJECT_NAME.fullmatch(name):
+                fail(f"{manifest_path}: project name must be one safe printable field")
+            if name in self.projects:
+                fail(f"{manifest_path}: project {name!r} is not declared exactly once")
+            if "prefix" in project:
+                fail(f"{manifest_path}: project prefixes are forbidden in shared-root-v1")
+            packages = project.get("packages")
+            if (not isinstance(packages, list) or not packages
+                    or not all(isinstance(p, str) and PACKAGE_NAME.fullmatch(p) for p in packages)):
+                fail(f"{manifest_path}: project {name!r} declares no safe package names")
+            repo = project.get("source_repo")
+            if not isinstance(repo, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+                fail(f"{manifest_path}: project {name!r} must declare a safe source_repo")
+            self.projects[name] = project
+            for package in packages:
+                if package in self.owners:
+                    fail(f"{manifest_path}: package ownership overlaps for {package!r}")
+                self.owners[package] = project
+        if project_name is not None and project_name not in self.projects:
             known = sorted(str(p.get("name")) for p in projects if isinstance(p, dict))
             fail(f"{manifest_path}: project {project_name!r} is not declared exactly once; "
                  f"declared: {', '.join(known)}")
-        project = matches[0]
-
-        self.project = project_name
-        self.packages = [str(value) for value in project.get("packages", [])]
-        if not self.packages or not all(PACKAGE_NAME.fullmatch(p) for p in self.packages):
-            fail(f"{manifest_path}: project {project_name!r} declares no safe package names")
-        if len(set(self.packages)) != len(self.packages):
-            fail(f"{manifest_path}: project {project_name!r} repeats a package name")
-
-        prefix = project.get("prefix")
-        if (
-            not isinstance(prefix, str)
-            or not RELEASE_FIELD.fullmatch(prefix)
-            or not PREFIX.fullmatch(prefix)
-            or "//" in prefix
-            or any(part in (".", "..") for part in prefix.split("/"))
-        ):
-            fail(f"{manifest_path}: project {project_name!r} has an unsafe prefix {prefix!r}")
-        self.prefix = prefix
+        self.project = project_name or self.origin
+        self.packages = (self.projects[project_name]["packages"] if project_name is not None
+                         else sorted(self.owners))
 
     @property
     def base_path(self) -> str:
-        return f"{self.host}{self.prefix}"
+        return self.host
 
 
-def load_domain(manifest_path: Path, project: str) -> Domain:
+def load_domain(manifest_path: Path, project: str | None = None) -> Domain:
     try:
         with manifest_path.open("rb") as handle:
             data = tomllib.load(handle)
@@ -525,6 +540,25 @@ def render(
         os.chmod(target, 0o644)
 
     dists = archive_root / "dists" / domain.suite
+    dists.mkdir(parents=True, exist_ok=True)
+    state = dists / "archive-state.json"
+    state.write_text(json.dumps({
+        "schema_version": 1,
+        "base_url": domain.base_url,
+        "suite": domain.suite,
+        "component": component,
+        "architectures": domain.architectures,
+        "packages": [{
+            "project": domain.owners[b.package]["name"],
+            "source_repo": domain.owners[b.package]["source_repo"],
+            "package": b.package, "version": b.version, "architecture": b.architecture,
+            "filename": b.pool_path,
+            "size": (archive_root / b.pool_path).stat().st_size,
+            "sha256": digest(archive_root / b.pool_path, "sha256"),
+        } for b in sorted(binaries, key=lambda b: b.identity)],
+    }, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    os.chmod(state, 0o644)
+    write_by_hash(state, dists)
     # `Architecture: all` belongs in every binary index, not in one of its own.
     portable = [b for b in binaries if b.architecture == "all"]
     for architecture in domain.architectures:
@@ -548,13 +582,13 @@ def render(
     )
     header = [
         f"Origin: {domain.origin}",
-        f"Label: {domain.project}",
+        f"Label: {domain.origin}",
         f"Suite: {domain.suite}",
         f"Codename: {domain.codename}",
         f"Architectures: {' '.join(domain.architectures)}",
         f"Components: {component}",
         "Acquire-By-Hash: yes",
-        f"Description: {domain.project} packages for {domain.base_path}",
+        f"Description: Packages for {domain.base_path}",
         f"Date: {rfc2822(epoch)}",
         f"Valid-Until: {rfc2822(epoch + domain.valid_until_days * 86400)}",
     ]
@@ -571,10 +605,10 @@ def render(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Render one project's APT archive from a domain manifest."
+        description="Render the complete domain APT archive from a verified merged pool."
     )
     parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--project", required=True)
+    parser.add_argument("--project", help="optional request identity, not an index filter")
     parser.add_argument("--pool-dir", type=Path, required=True,
                         help="flat directory holding every .deb to publish")
     parser.add_argument("--output-dir", type=Path, required=True,
@@ -594,7 +628,9 @@ def main() -> None:
     if args.output_dir.exists() or args.output_dir.is_symlink():
         fail(f"output-dir must be a new path: {args.output_dir}")
 
-    domain = load_domain(args.manifest, args.project)
+    if args.project:
+        load_domain(args.manifest, args.project)
+    domain = load_domain(args.manifest)
     if domain.valid_until_days * 86400 < MIN_VALID_SECONDS:
         fail("valid_until_days must cover at least a week")
 
