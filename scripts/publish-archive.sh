@@ -116,7 +116,7 @@ plan=$(python3 "$script_root/domain_snapshot.py" guard --manifest "$manifest" \
 total=$(printf '%s\n' "$plan" | wc -l | tr -d ' ')
 bytes=$(printf '%s\n' "$plan" | awk -F'\t' '{s+=$5} END {print s+0}')
 printf 'target %s at %s, %s objects, %s bytes\n' "$bucket" "$base_url" "$total" "$bytes"
-for phase in keyring pool indexes release; do
+for phase in keyring pool indexes page release; do
   count=$(printf '%s\n' "$plan" | awk -F'\t' -v p="$phase" '$1==p' | wc -l | tr -d ' ')
   printf '  phase %-8s %s objects\n' "$phase" "$count"
 done
@@ -134,7 +134,7 @@ export AR_BUCKET="$bucket" AR_ENDPOINT="$endpoint"
 # The fields reach xargs NUL-separated, so that a space in a file name breaks
 # nothing. `-n 3` hands the helper the path, the key and the type as $1 to
 # $3.
-for phase in keyring pool indexes release; do
+for phase in keyring pool indexes page release; do
   subset=$(printf '%s\n' "$plan" | awk -F'\t' -v p="$phase" '$1==p')
   [[ -n "$subset" ]] || continue
   count=$(printf '%s\n' "$subset" | wc -l | tr -d ' ')

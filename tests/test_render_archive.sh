@@ -394,5 +394,94 @@ else
   bad "$t: a line break in the prefix" "$(printf '%s' "$msg" | head -1)"
 fi
 
+# ---------------------------------------------------------------- T9
+# The landing page is the only object in the archive that no signature covers.
+# It may therefore only repeat what a reader can check for themselves, and it
+# must not move when the publication time moves: a refresh has to touch signed
+# metadata alone.
+t="T9  the landing page"
+page="$o/index.html"
+check "$t: sits at the archive root" \
+  "$([ -f "$page" ] && echo yes || echo no)" "yes"
+check "$t: is world readable" \
+  "$(ls -l "$page" | cut -c1-10)" "-rw-r--r--"
+check "$t: names every package once" \
+  "$(grep -c '<td><code>demo\(-extras\)\?</code></td>' "$page")" "2"
+check "$t: names every version" \
+  "$(grep -c '1\.0\.0, 1\.1\.0, 2\.0\.0' "$page")" "2"
+check "$t: names both architectures" \
+  "$(grep -c 'amd64, arm64' "$page")" "2"
+check "$t: carries the source line verbatim" \
+  "$(grep -cF 'deb [signed-by=/usr/share/keyrings/example-archive-keyring.pgp] https://deb.example.invalid rolling main' "$page")" "1"
+check "$t: carries both fingerprints" \
+  "$(grep -c '<code>TBD</code>' "$page")" "2"
+# A page that pulls a script, a style sheet or an image makes whoever serves
+# that resource a participant in an installation instruction.
+check "$t: loads nothing from anywhere" \
+  "$(grep -Eic '<script|<link|src=|@import' "$page")" "0"
+
+o9="$work/t9out"
+if must_run "$t: renders a second time" --manifest "$m" --project demo \
+     --pool-dir "$p" --output-dir "$o9" --publication-epoch $((EPOCH + 86400)); then
+  check "$t: a later publication time changes nothing" \
+    "$(cmp -s "$page" "$o9/index.html" && echo same || echo differs)" "same"
+fi
+
+# The renderer refuses an empty pool, so the archive can never be empty
+# through the wrapper. render() is a library function all the same, and a
+# table with no row must still explain how to trust the archive.
+empty=$(python3 - "$root" "$m" <<'EMPTY'
+import pathlib, sys
+sys.path.insert(0, sys.argv[1] + "/scripts")
+from render_archive import load_domain, landing_page
+print(landing_page(load_domain(pathlib.Path(sys.argv[2]), "demo"), [], "main"))
+EMPTY
+)
+check "$t: an empty archive says so" \
+  "$(printf '%s' "$empty" | grep -c 'carries no package')" "1"
+# Fetch, verify, install and the source line: five lines, every one of them
+# naming the keyring the reader has to end up with.
+check "$t: an empty archive still names the keyring" \
+  "$(printf '%s' "$empty" | grep -cF 'example-archive-keyring.pgp')" "5"
+check "$t: an empty archive opens no package table" \
+  "$(printf '%s' "$empty" | grep -c '<th>Package</th>')" "0"
+
+# ---------------------------------------------------------------- T10
+# Manifest text reaches the page as HTML. Unescaped, a single manifest field
+# would be able to write the rest of the page.
+t="T10 the page escapes what the manifest brought"
+x9="$work/t9esc"; mkdir -p "$x9/pool"
+manifest "$x9/m.toml"
+python3 - "$x9/m.toml" <<'ESCAPE'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+# Every character HTML gives a meaning to, in one field.
+path.write_text(path.read_text().replace(
+    'origin = "example"', r'origin = "ex<a>&\"mple"'))
+ESCAPE
+deb "$x9/pool" --package demo --version 1.0.0 --architecture amd64
+if must_run "$t: renders markup characters" --manifest "$x9/m.toml" \
+     --project demo --pool-dir "$x9/pool" --output-dir "$x9/out" \
+     --publication-epoch $EPOCH; then
+  check "$t: the field arrives escaped" \
+    "$(grep -c 'ex&lt;a&gt;&amp;&quot;mple' "$x9/out/index.html")" "1"
+  check "$t: no raw markup survives" \
+    "$(grep -c 'ex<a>' "$x9/out/index.html")" "0"
+fi
+
+# ---------------------------------------------------------------- T11
+# keyring_file is printed into an `install` and a `signed-by=` line that a
+# reader pastes as root. Printable is not enough there; it has to be a plain
+# absolute path.
+t="T11 keyring_file must be safe in a root shell"
+t7 's|^keyring_file = .*|keyring_file = "/usr/share/keyrings/k.pgp; rm -rf /"|' \
+   'keyring_file must be a plain absolute path' 'a command separator'
+t7 's|^keyring_file = .*|keyring_file = "/usr/share/keyrings/$(id).pgp"|' \
+   'keyring_file must be a plain absolute path' 'a command substitution'
+t7 's|^keyring_file = .*|keyring_file = "usr/share/keyrings/k.pgp"|' \
+   'keyring_file must be a plain absolute path' 'a relative path'
+t7 's|^keyring_file = .*|keyring_file = "/usr/share/keyrings/../../etc/k.pgp"|' \
+   'keyring_file must be a plain absolute path' 'a parent directory step'
+
 printf '\n  passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

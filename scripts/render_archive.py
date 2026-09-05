@@ -25,6 +25,7 @@ import argparse
 import bz2
 import gzip
 import hashlib
+import html
 import io
 import json
 import lzma
@@ -53,6 +54,9 @@ HEX40 = re.compile(r"^[0-9A-Fa-f]{40}$")
 # Anything written into a Release line. A line break in it appends an
 # arbitrary further line to the file.
 RELEASE_FIELD = re.compile(r"^[\x20-\x7e]+$")
+# Safe as a shell word without quoting: the landing page prints such a path
+# into a command a reader pastes as root.
+ABSOLUTE_PATH = re.compile(r"^(?:/[A-Za-z0-9][A-Za-z0-9._+-]*)+$")
 
 # Bounds against a hostile .deb.  A project release is attested before it gets
 # here, but the renderer must not become the weak link if that ever slips.
@@ -286,6 +290,12 @@ class Domain:
         self.origin = need("domain", "origin", str)
         self.host = need("domain", "host", str)
         self.base_url = need("domain", "base_url", str)
+        # The landing page states what a client has to trust. Reading these
+        # here means the page cannot disagree with what actually signs.
+        self.keyring_package = need("domain", "keyring_package", str)
+        self.keyring_file = need("domain", "keyring_file", str)
+        self.primary_fingerprint = need("signing", "primary_fingerprint", str)
+        self.signing_subkey = need("signing", "signing_subkey", str)
         self.suite = need("release", "suite", str)
         self.codename = need("release", "codename", str)
         self.components = need_strings("release", "components")
@@ -303,6 +313,27 @@ class Domain:
         for label, value in (("origin", self.origin), ("host", self.host)):
             if not RELEASE_FIELD.fullmatch(value):
                 fail(f"{manifest_path}: [domain] {label} must be one printable line")
+
+        # The landing page offers `install` and `signed-by=` lines for a reader
+        # to paste into a root shell, so these two have to be safe as shell
+        # words, not merely printable. host carries the same duty and is
+        # already a DNS name, and base_url is pinned to it above.
+        if not PACKAGE_NAME.fullmatch(self.keyring_package):
+            fail(f"{manifest_path}: [domain] keyring_package must be a package name")
+        if not ABSOLUTE_PATH.fullmatch(self.keyring_file):
+            fail(f"{manifest_path}: [domain] keyring_file must be a plain absolute path")
+
+        # The fingerprints reach the page as table text and nothing else. They
+        # are deliberately not required to be real at render time: the renderer
+        # runs without any key, and a manifest may still say "TBD".
+        # publication_plan.py refuses to publish a TBD value, and
+        # domain_snapshot.binding() demands the 40 hex digits, so a placeholder
+        # cannot reach a published archive. One printable line is all this
+        # needs, and the page escapes it on top of that.
+        for label, value in (("primary_fingerprint", self.primary_fingerprint),
+                             ("signing_subkey", self.signing_subkey)):
+            if not RELEASE_FIELD.fullmatch(value):
+                fail(f"{manifest_path}: [signing] {label} must be one printable line")
 
         if not SUITE.fullmatch(self.suite) or not SUITE.fullmatch(self.codename):
             fail(f"{manifest_path}: suite and codename must be safe path components")
@@ -526,6 +557,106 @@ def write_by_hash(index: Path, directory: Path) -> None:
         os.chmod(target, 0o644)
 
 
+LANDING_PAGE_NAME = "index.html"
+
+# No external resource, no script, no font. The page has to be readable in a
+# text browser and must not make a third party a participant in an
+# installation instruction.
+LANDING_PAGE_STYLE = """\
+body{max-width:52rem;margin:2rem auto;padding:0 1rem;
+font:16px/1.5 system-ui,sans-serif;color:#111;background:#fff}
+code,pre{font-family:ui-monospace,monospace}
+pre{background:#f4f4f4;padding:.75rem;overflow-x:auto}
+table{border-collapse:collapse;width:100%}
+th,td{border-bottom:1px solid #ddd;padding:.35rem .5rem;text-align:left;
+vertical-align:top}
+th{white-space:nowrap}
+@media(prefers-color-scheme:dark){body{color:#eee;background:#111}
+pre{background:#222}th,td{border-color:#444}}"""
+
+
+def landing_page(domain: Domain, binaries: list[Binary], component: str) -> str:
+    """Render the human-readable page. Deterministic: same inputs, same bytes.
+
+    A direct R2 custom domain has no directory listing, so a reader who types
+    the host into a browser gets an error page. What such a reader needs is
+    exactly the part an installation cannot verify for them: which keyring to
+    trust and which fingerprint it must carry.
+    """
+    esc = html.escape
+    rows = {}
+    for binary in binaries:
+        entry = rows.setdefault(binary.package, {"versions": set(), "architectures": set()})
+        entry["versions"].add(binary.version)
+        entry["architectures"].add(binary.architecture)
+
+    lines = [
+        "<!DOCTYPE html>",
+        '<html lang="en"><head><meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width,initial-scale=1">',
+        f"<title>{esc(domain.host)}</title>",
+        f"<style>{LANDING_PAGE_STYLE}</style>",
+        "</head><body>",
+        f"<h1>{esc(domain.host)}</h1>",
+        f"<p>An APT archive signed by {esc(domain.origin)}. "
+        f"Suite <code>{esc(domain.suite)}</code>, component "
+        f"<code>{esc(component)}</code>, "
+        f"architectures {esc(' and '.join(domain.architectures))}.</p>",
+        "<h2>1. Fetch the keyring and check it</h2>",
+        "<p>Checking after installing proves nothing, so the download goes to a "
+        "temporary file first. The fingerprints it prints have to be exactly the "
+        "two below; anything else is not this archive.</p>",
+        "<pre>",
+        esc(f"curl -fsSL -o /tmp/{domain.keyring_package}.pgp \\"),
+        esc(f"  {domain.base_url}/{domain.keyring_package}.pgp"),
+        esc(f"gpg --show-keys --with-fingerprint /tmp/{domain.keyring_package}.pgp"),
+        "</pre>",
+        "<table><tbody>",
+        f"<tr><th>Primary key, offline</th><td><code>"
+        f"{esc(domain.primary_fingerprint)}</code></td></tr>",
+        f"<tr><th>Signing subkey</th><td><code>"
+        f"{esc(domain.signing_subkey)}</code></td></tr>",
+        "</tbody></table>",
+        "<h2>2. Install it and add the source</h2>",
+        "<pre>",
+        esc(f"sudo install -m 0644 /tmp/{domain.keyring_package}.pgp"
+            f" {domain.keyring_file}"),
+        "",
+        esc(f"echo 'deb [signed-by={domain.keyring_file}] "
+            f"{domain.base_url} {domain.suite} {component}' \\"),
+        esc(f"  | sudo tee /etc/apt/sources.list.d/{domain.host}.list >/dev/null"),
+        "",
+        esc("sudo apt update"),
+        "</pre>",
+        "<h2>Packages</h2>",
+    ]
+    if rows:
+        lines.append("<table><thead><tr><th>Package</th><th>Versions</th>"
+                     "<th>Architectures</th><th>Source</th></tr></thead><tbody>")
+        for package in sorted(rows):
+            owner = domain.owners[package]
+            versions = ", ".join(sorted(rows[package]["versions"]))
+            architectures = ", ".join(sorted(rows[package]["architectures"]))
+            repo = owner["source_repo"]
+            lines.append(
+                f"<tr><td><code>{esc(package)}</code></td>"
+                f"<td>{esc(versions)}</td><td>{esc(architectures)}</td>"
+                f'<td><a href="https://github.com/{esc(repo)}">{esc(repo)}</a></td></tr>')
+        lines.append("</tbody></table>")
+    else:
+        lines.append("<p>The archive currently carries no package.</p>")
+    lines += [
+        # Deliberately no publication date. The page would then change on
+        # every refresh, and a refresh must touch only signed metadata; the
+        # authoritative date is the Date field of the signed Release.
+        f'<p>The signed metadata under <code>dists/{esc(domain.suite)}/</code> '
+        "is authoritative; this page is a convenience and is not signed.</p>",
+        "</body></html>",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def render(
     domain: Domain,
     binaries: list[Binary],
@@ -575,6 +706,10 @@ def render(
         write_gzip(packages, binary_dir / "Packages.gz")
         for name in INDEX_NAMES:
             write_by_hash(binary_dir / name, binary_dir)
+
+    page = archive_root / LANDING_PAGE_NAME
+    page.write_text(landing_page(domain, binaries, component), encoding="utf-8")
+    os.chmod(page, 0o644)
 
     indexes = sorted(
         path for path in dists.rglob("*")

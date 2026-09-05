@@ -161,7 +161,7 @@ fi
 p=$(plan)
 check "phase order" \
   "$(printf '%s' "$p" | awk -F'\t' '{print $1}' | uniq | tr '\n' ' ')" \
-  "keyring pool indexes release "
+  "keyring pool indexes page release "
 check "InRelease is the last entry" \
   "$(printf '%s' "$p" | tail -1 | awk -F'\t' '{print $3}')" \
   "dists/rolling/InRelease"
@@ -282,7 +282,8 @@ check "InRelease was not attempted afterwards" \
 
 printf '\n== Part B  Follow-up check against the served version ==\n'
 srv="$work/serve"; mkdir -p "$srv"
-cp "$work/out/example-archive-keyring.asc" "$work/out/example-archive-keyring.pgp" "$srv/"
+cp "$work/out/example-archive-keyring.asc" "$work/out/example-archive-keyring.pgp" \
+   "$work/out/index.html" "$srv/"
 cp -R "$work/out/dists" "$work/out/pool" "$srv/"
 
 port=0
@@ -464,7 +465,9 @@ else
   bad "the test index is larger than two typical pipe buffers"
 fi
 rm -rf "$srv/demo/dists" "$srv/pool"
+# index.html mit austauschen: es nennt die Pakete, gehoert also zu diesem Baum.
 cp -R "$large/dists" "$large/pool" "$srv/"
+cp "$large/index.html" "$srv/"
 large_msg=$("$root/scripts/verify-publication.sh" --manifest "$work/m.toml" \
   --project demo --archive-dir "$large" --publication-epoch "$EPOCH" \
   --base-url "http://127.0.0.1:$port" 2>&1)
