@@ -49,6 +49,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (SnapshotError, OSError, ValueError, KeyError, TypeError, EOFError, subprocess.TimeoutExpired) as error:
+    except (SnapshotError, OSError, ValueError, KeyError, TypeError, EOFError, RecursionError, subprocess.TimeoutExpired) as error:
         print(f"::error::AR160 publication verification rejected: {error}", file=sys.stderr)
         sys.exit(1)

@@ -475,6 +475,6 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except (SnapshotError, OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
+    except (SnapshotError, OSError, ValueError, KeyError, TypeError, RecursionError, subprocess.TimeoutExpired) as error:
         print(f"AR190 domain snapshot rejected: {error}", file=sys.stderr)
         sys.exit(1)

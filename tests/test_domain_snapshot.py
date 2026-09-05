@@ -230,6 +230,11 @@ keep_versions = 5
         with self.assertRaisesRegex(SystemExit, "ownership overlaps"):
             self.restore()
 
+    def test_control_field_names_are_case_insensitive(self):
+        for field in ("package", "pAcKaGe", "PACKAGE"):
+            with self.subTest(field=field), self.assertRaisesRegex(SystemExit, "repeated"):
+                renderer.parse_fields(f"Package: alpha\n{field}: beta\n", "fixture")
+
     def test_symlink_rejected(self):
         (self.archive / "linked").symlink_to(self.pool, target_is_directory=True)
         with self.assertRaisesRegex(snapshot.SnapshotError, "link"):

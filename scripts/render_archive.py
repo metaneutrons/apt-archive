@@ -231,6 +231,7 @@ def control_text(package: Path) -> str:
 
 def parse_fields(text: str, origin: str) -> dict[str, str]:
     fields: dict[str, str] = {}
+    names: set[str] = set()
     current: str | None = None
     for line in text.splitlines():
         if line.startswith((" ", "\t")):
@@ -241,8 +242,9 @@ def parse_fields(text: str, origin: str) -> dict[str, str]:
         if ": " not in line:
             fail(f"{origin}: Debian control metadata has a malformed field")
         current, value = line.split(": ", 1)
-        if not re.fullmatch(r"[A-Za-z0-9-]+", current) or current in fields:
+        if not re.fullmatch(r"[A-Za-z0-9-]+", current) or current.casefold() in names:
             fail(f"{origin}: Debian control field is unsafe or repeated: {current!r}")
+        names.add(current.casefold())
         fields[current] = value
     return fields
 
