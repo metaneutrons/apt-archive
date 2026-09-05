@@ -29,8 +29,10 @@ architectures = ["amd64", "arm64"]
 acquire_by_hash = true
 valid_until_days = 180
 
-# Every project gets its own prefix and thereby its own Valid-Until clock. A
-# neglected project therefore does not drag the others down with it.
+# A project owns disjoint package names, not a URL prefix. All projects of this
+# domain share one pool, one dists/rolling and therefore one clock: every
+# publication refreshes the validity of the whole archive, unchanged packages
+# included.
 [[projects]]
 name = "aros-tools"
 source_repo = "metaneutrons/aros-tools"
