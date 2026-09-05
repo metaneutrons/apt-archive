@@ -59,3 +59,16 @@ packages = ["ugos-cli"]
 # Anzahl der jeweils behaltenen Releases im Pool. Ohne Grenze waechst er
 # unbegrenzt und jeder Lauf laedt alles neu.
 keep_versions = 5
+
+[[projects]]
+# Repository, Crate und Debian-Paket heissen hier alle bups. Die glibc-Pakete
+# entstehen nativ je Architektur in einem digest-gepinnten Bookworm-Container,
+# der Dateiname traegt deshalb amd64 beziehungsweise arm64 und keine
+# Debian-Revision.
+name = "bups"
+prefix = "/bups"
+source_repo = "metaneutrons/bups"
+packages = ["bups"]
+# Anzahl der jeweils behaltenen Releases im Pool. Ohne Grenze waechst er
+# unbegrenzt und jeder Lauf laedt alles neu.
+keep_versions = 5
