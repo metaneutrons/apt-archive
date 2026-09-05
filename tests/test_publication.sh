@@ -369,8 +369,8 @@ cp "$work/k-generation.inrel" "$I"
 
 probe() {  # $1 = name, $2 = expected fragment
   local msg; msg=$(verify)
-  if printf '%s' "$msg" | grep -qF "$2"; then ok "erkennt: $1"
-  else bad "erkennt: $1" "$(printf '%s' "$msg" | tail -1)"; fi
+  if printf '%s' "$msg" | grep -qF "$2"; then ok "detects: $1"
+  else bad "detects: $1" "$(printf '%s' "$msg" | tail -1)"; fi
 }
 
 D="$srv/demo/pool/main/d/demo/demo_1.0.0_amd64.deb"

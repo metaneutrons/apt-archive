@@ -128,8 +128,8 @@ if [ $? -ne 0 ]; then bad "T1 signature" "$out"; else
   detached_epoch=$(gpgv --keyring "$A/example-archive-keyring.pgp" --status-fd 1 \
               "$A/dists/rolling/Release.gpg" "$A/dists/rolling/Release" 2>/dev/null |
               awk '/VALIDSIG/{print $5}')
-  check "T1 InRelease-Signatur nutzt Publikations-Epoche" "$inrelease_epoch" "$EPOCH"
-  check "T1 Release.gpg-Signatur nutzt Publikations-Epoche" "$detached_epoch" "$EPOCH"
+  check "T1 the InRelease signature uses the publication epoch" "$inrelease_epoch" "$EPOCH"
+  check "T1 the Release.gpg signature uses the publication epoch" "$detached_epoch" "$EPOCH"
 fi
 
 printf '\n== T2  Determinism ==\n'
@@ -222,7 +222,7 @@ check "T4 the bundle contains two secret subkeys" \
 D="$work/d"; render "$D"
 manifest "$work/m.toml" "$PRIMARY" "$SUB_A"
 out=$(sign "$D" "$work/m.toml" "$work/bundle-both.asc")
-if [ $? -ne 0 ]; then bad "T4 Signatur mit Zwei-Subkey-Bundle" "$out"; else
+if [ $? -ne 0 ]; then bad "T4 signing with a two-subkey bundle" "$out"; else
   ok "T4 signing runs"
   check "T4 keyring carries exactly one subkey" \
     "$(gpg --no-options --batch --with-colons --show-keys "$D/example-archive-keyring.pgp" | grep -c '^sub')" "1"

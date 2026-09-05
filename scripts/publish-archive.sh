@@ -117,8 +117,8 @@ export AR_BUCKET="$bucket" AR_ENDPOINT="$endpoint"
 # Hence parallel within a phase and strictly sequential between them.
 #
 # The fields reach xargs NUL-separated, so that a space in a file name breaks
-# nothing. `-n 3` hands the helper the path, the key and the type
-# als $1 bis $3.
+# nothing. `-n 3` hands the helper the path, the key and the type as $1 to
+# $3.
 for phase in keyring pool indexes release; do
   subset=$(printf '%s\n' "$plan" | awk -F'\t' -v p="$phase" '$1==p')
   [[ -n "$subset" ]] || continue
