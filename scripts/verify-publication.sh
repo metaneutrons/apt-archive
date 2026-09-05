@@ -126,7 +126,7 @@ step "    identisch"
 
 step "4  Indexe gegen die Summen aus InRelease"
 IFS=',' read -r -a arches <<< "$architectures"
-first_deb=''
+: > "$work/filenames"
 for arch in "${arches[@]}"; do
   rel="main/binary-${arch}/Packages.gz"
   get "${prefix}/dists/${suite}/${rel}" "$work/Packages.gz" 16777216
@@ -175,23 +175,34 @@ PY
     || fail "the by-hash copy of $rel differs from the plain path"
   step "    ${arch}: by-hash/SHA512 identisch"
 
-  if [[ -z "$first_deb" ]]; then
-    # awk liest absichtlich bis EOF. Ein fruehes `exit` schliesst die Pipe,
-    # laesst gzip bei grossen Indexen mit SIGPIPE 141 sterben und beendet unter
-    # pipefail die gesamte Nachkontrolle ohne unsere Fehlermeldung.
-    first_deb=$(gzip -dc "$work/Packages.gz" |
-      awk '$1 == "Filename:" && first == "" { first = $2 } END { print first }') \
-      || fail "cannot inspect $rel for a package filename"
-  fi
+  # Jeder Filename-Eintrag, nicht nur der erste. awk liest absichtlich bis EOF:
+  # ein frueher `exit` schliesst die Pipe, laesst gzip bei grossen Indexen mit
+  # SIGPIPE 141 sterben und beendet unter pipefail die gesamte Nachkontrolle
+  # ohne unsere Fehlermeldung.
+  gzip -dc "$work/Packages.gz" |
+    awk '$1 == "Filename:" { print $2 }' >> "$work/filenames" \
+    || fail "cannot inspect $rel for package filenames"
 done
 
-step "5  Ein Paket byteweise"
-[[ -n "$first_deb" ]] || fail 'no Filename entry in any published index'
-get "${prefix}/${first_deb}" "$work/package.deb" 536870912
-local_deb="$archive_dir/${first_deb}"
-[[ -f "$local_deb" ]] || fail "the local package is missing: $local_deb"
-cmp -s "$work/package.deb" "$local_deb" \
-  || fail "the published $first_deb differs from the local file"
-step "    ${first_deb} identisch"
+step "5  Jedes veroeffentlichte Paket byteweise"
+# Ein Paket, das in mehreren Architektur-Indexen steht, etwa mit
+# Architecture: all, wird nur einmal geholt.
+sort -u "$work/filenames" > "$work/filenames.uniq"
+count=$(wc -l < "$work/filenames.uniq" | tr -d ' ')
+[[ "$count" -gt 0 ]] || fail 'no Filename entry in any published index'
+while IFS= read -r deb; do
+  [[ -n "$deb" ]] || continue
+  case "$deb" in
+    /*|*..*) fail "unsafe Filename entry in a published index: $deb" ;;
+  esac
+  get "${prefix}/${deb}" "$work/package.deb" 536870912
+  local_deb="$archive_dir/${deb}"
+  [[ -f "$local_deb" && ! -L "$local_deb" ]] \
+    || fail "the local package is missing: $local_deb"
+  cmp -s "$work/package.deb" "$local_deb" \
+    || fail "the published $deb differs from the local file"
+  step "    ${deb} identisch"
+done < "$work/filenames.uniq"
+step "    ${count} Paket(e) geprueft"
 
 printf 'publication verified against %s\n' "$base_url"
