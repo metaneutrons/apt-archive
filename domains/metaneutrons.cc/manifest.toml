@@ -81,3 +81,13 @@ packages = ["bups"]
 # How many releases are kept in the pool. Without a limit it grows without
 # bound and every run downloads everything again.
 keep_versions = 5
+
+[[projects]]
+# The window is three, not five. png2lvgl was released by an earlier pipeline up
+# to v0.3.5, and those .deb files carry no attestation, so a window of five would
+# reach them and abort the ingest by design. v0.3.9, v0.3.11 and v0.3.12 are
+# attested. Raise this to five once three further attested releases exist.
+name = "png2lvgl"
+source_repo = "metaneutrons/png2lvgl"
+packages = ["png2lvgl"]
+keep_versions = 3
