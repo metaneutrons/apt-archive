@@ -93,14 +93,18 @@ keep_versions = 5
         self.pool = self.work / "pool"
         self.pool.mkdir()
         self.deb(self.pool, "alpha", "1.0", "amd64")
-        self.deb(self.pool, "alpha", "1.0", "arm64")
+        # zstd on purpose: the snapshot imports the renderer's control reader
+        # and runs on the runner rather than in the pinned image, so the
+        # interpreter floor has to hold in both places.
+        self.deb(self.pool, "alpha", "1.0", "arm64", control_compression="zst")
         self.deb(self.pool, "beta", "1.0", "all")
         self.archive = self.make_archive(self.pool, "archive", self.epoch)
 
-    def deb(self, pool, package, version, arch):
+    def deb(self, pool, package, version, arch, control_compression="gz"):
         path = pool / f"{package}_{version}_{arch}.deb"
         build(path, {"Package": package, "Version": version, "Architecture": arch,
-                     "Maintainer": "Test <test@example.invalid>", "Description": "fixture"})
+                     "Maintainer": "Test <test@example.invalid>", "Description": "fixture"},
+              control_compression=control_compression)
         return path
 
     def sign(self, archive, epoch, subkey=None):
