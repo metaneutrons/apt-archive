@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """Build a minimal but real .deb without dpkg, so tests run on any host.
 
-A .deb is an ar archive of debian-binary, control.tar.gz and data.tar.gz, in
+A .deb is an ar archive of debian-binary, a control.tar* and a data.tar*, in
 that order.  Nothing here is clever; it exists so the renderer is tested
 against actual package bytes rather than a mock.
+
+The control member can be written with any compression Debian allows, because
+that is a real difference between builders rather than a corner case: dpkg-deb
+compresses both members uniformly unless told otherwise, and on Ubuntu that
+default is zstd.
 """
 
 from __future__ import annotations
 
 import argparse
+import bz2
 import gzip
 import io
+import lzma
 import tarfile
 from pathlib import Path
 
@@ -43,6 +50,27 @@ def gzip_bytes(payload: bytes) -> bytes:
     return out.getvalue()
 
 
+def compress_control(payload: bytes, how: str) -> tuple[str, bytes]:
+    """Return the ar member name and bytes for one control tar compression."""
+    if how == "gz":
+        return "control.tar.gz", gzip_bytes(payload)
+    if how == "xz":
+        return "control.tar.xz", lzma.compress(payload, format=lzma.FORMAT_XZ)
+    if how == "bz2":
+        return "control.tar.bz2", bz2.compress(payload)
+    if how == "none":
+        return "control.tar", payload
+    if how == "zst":
+        try:
+            from compression import zstd
+        except ImportError:
+            raise SystemExit(
+                "--control-compression zst needs Python 3.14 or newer"
+            ) from None
+        return "control.tar.zst", zstd.compress(payload)
+    raise ValueError(f"unknown control compression: {how}")
+
+
 def tar_gz(members: dict[str, bytes]) -> bytes:
     entries = [(name, payload, "regular") for name, payload in sorted(members.items())]
     return gzip_bytes(tar_bytes(entries))
@@ -63,7 +91,8 @@ def ar(members: list[tuple[str, bytes]]) -> bytes:
     return out.getvalue()
 
 
-def build(path: Path, fields: dict[str, str], fixture: str = "valid") -> None:
+def build(path: Path, fields: dict[str, str], fixture: str = "valid",
+          control_compression: str = "gz") -> None:
     control = "".join(f"{k}: {v}\n" for k, v in fields.items()).encode("utf-8")
     if fixture == "control-no-newline":
         control = control.rstrip(b"\n")
@@ -78,12 +107,17 @@ def build(path: Path, fields: dict[str, str], fixture: str = "valid") -> None:
     elif fixture == "symlink-control":
         control_entries = [("./control", b"", "symlink")]
 
-    control_member = "control.tar.gz"
-    control_payload = gzip_bytes(tar_bytes(control_entries))
+    control_member, control_payload = compress_control(
+        tar_bytes(control_entries), control_compression)
     if fixture == "corrupt-control-compression":
-        control_payload = b"not a gzip stream"
+        control_payload = b"not a compressed stream"
     elif fixture == "corrupt-control-tar":
-        control_payload = gzip_bytes(b"not a tar archive")
+        control_member, control_payload = compress_control(
+            b"not a tar archive", control_compression)
+    elif fixture == "unknown-control-compression":
+        # A compression Debian permits but this renderer does not implement.
+        # The member name decides, so the payload need not be an lzip stream.
+        control_member = "control.tar.lz"
 
     members = [
         ("debian-binary", b"2.0\n"),
@@ -116,12 +150,18 @@ def main() -> None:
     parser.add_argument("--extra", action="append", default=[],
                         help="additional control field as Name=Value")
     parser.add_argument(
+        "--control-compression",
+        choices=("gz", "xz", "bz2", "zst", "none"),
+        default="gz",
+        help="compression of the control.tar ar member",
+    )
+    parser.add_argument(
         "--fixture",
         choices=(
             "valid", "bad-ar-magic", "truncated-ar-header", "duplicate-ar-member",
             "bad-ar-padding", "corrupt-control-compression", "corrupt-control-tar",
             "missing-control", "duplicate-control", "symlink-control",
-            "control-no-newline", "control-nul",
+            "control-no-newline", "control-nul", "unknown-control-compression",
         ),
         default="valid",
         help="emit one deliberately malformed package structure for a negative test",
@@ -140,7 +180,7 @@ def main() -> None:
         name, _, value = item.partition("=")
         fields[name] = value
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    build(args.out, fields, args.fixture)
+    build(args.out, fields, args.fixture, args.control_compression)
 
 
 if __name__ == "__main__":

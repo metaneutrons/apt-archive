@@ -26,6 +26,15 @@ jobs:
         with:
           persist-credentials: false
 
+      # The renderer runs in a digest-pinned 3.14 image and reads a zstd
+      # control member with `compression.zstd`, which is stdlib from 3.14 on.
+      # ubuntu-24.04 ships 3.12, so without this the suites here would run
+      # against an interpreter that cannot do what production does, and the
+      # zstd contract would silently go untested.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+
       - name: Every checked-in shell program is one lint boundary
         run: |
           set -euo pipefail
@@ -50,7 +59,8 @@ jobs:
           chmod +x "$tool"
           "$tool" validate
 
-      # tomllib needs 3.11; ubuntu-24.04 ships 3.12.
+      # tomllib needs 3.11, compression.zstd needs 3.14; the step above pins
+      # the interpreter this job uses.
       - name: Python parses
         run: |
           set -euo pipefail

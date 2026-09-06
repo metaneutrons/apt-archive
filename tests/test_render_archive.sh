@@ -495,5 +495,46 @@ t7 's|^keyring_file = .*|keyring_file = "usr/share/keyrings/k.pgp"|' \
 t7 's|^keyring_file = .*|keyring_file = "/usr/share/keyrings/../../etc/k.pgp"|' \
    'keyring_file must be a plain absolute path' 'a parent directory step'
 
+# ---------------------------------------------------------------- T12
+# Debian allows several compressions for the control member, and builders
+# differ: `dpkg-deb` compresses both ar members uniformly unless told
+# otherwise, and on Ubuntu that default is zstd. Every allowed form has to
+# reach the index, because a release already published cannot be repacked --
+# its attestation binds to the run that built it.
+t="T12 the control member in every compression the renderer accepts"
+m="$work/t12.toml"; manifest "$m"
+p12="$work/t12pool"; mkdir -p "$p12"
+version=0
+for c in gz xz bz2 zst none; do
+  version=$((version+1))
+  deb "$p12" --package demo --version "1.$version.0" --architecture amd64 \
+    --control-compression "$c"
+done
+o12="$work/t12out"
+if must_run "$t" --manifest "$m" --project demo --pool-dir "$p12" \
+     --output-dir "$o12" --publication-epoch $EPOCH; then
+  check "$t: every package reached the index" \
+    "$(grep -c '^Package:' "$o12/dists/rolling/main/binary-amd64/Packages")" "5"
+  for version in 1 2 3 4 5; do
+    check "$t: version 1.$version.0 carries its control fields" \
+      "$(grep -c "^Version: 1.$version.0\$" "$o12/dists/rolling/main/binary-amd64/Packages")" "1"
+  done
+fi
+
+mk_damaged_compression() {  # $1 = control compression
+  local how=$1 d="$work/damaged.zstd.$1"; mkdir -p "$d/pool"; manifest "$d/m.toml"
+  python3 "$mkdeb" --out "$d/pool/damaged.deb" --package demo --version 1.0.0 \
+    --architecture amd64 --control-compression "$how" \
+    --fixture corrupt-control-compression
+  run --manifest "$d/m.toml" --project demo --pool-dir "$d/pool" \
+    --output-dir "$d/out" --publication-epoch $EPOCH
+}
+# ZstdError is not an OSError; without being named in the renderer this leaves
+# a traceback instead of a named abort.
+reject "a damaged zstd frame is rejected by name" "cannot decompress control metadata" \
+  mk_damaged_compression zst
+reject "a compression the renderer does not implement is rejected" \
+  "unsupported Debian control compression" mk_damaged unknown-control-compression
+
 printf '\n  passed %d, failed %d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
