@@ -38,6 +38,18 @@ import tomllib
 from pathlib import Path
 from typing import BinaryIO, NoReturn
 
+# Stdlib since 3.14 (PEP 784).  The renderer runs in a digest-pinned 3.14
+# image, so this import is satisfied where it matters; the fallback keeps the
+# module importable on an older interpreter and turns the gap into a named
+# abort at the one place that needs it.
+try:
+    from compression import zstd as zstd_module
+except ImportError:  # pragma: no cover - only on an interpreter below 3.14
+    zstd_module = None
+    ZSTD_ERRORS: tuple[type[BaseException], ...] = ()
+else:
+    ZSTD_ERRORS = (zstd_module.ZstdError,)
+
 from release_time import MIN_VALID_SECONDS, rfc2822
 
 AR_MAGIC = b"!<arch>\n"
@@ -159,6 +171,24 @@ def ar_control_member(package: Path) -> tuple[str, bytes]:
     return candidates[0]
 
 
+# `dpkg-deb` compresses both ar members uniformly unless told otherwise, and
+# on Ubuntu that default is zstd.  A `control.tar.zst` is a valid Debian
+# package; dpkg installs it.  Rejecting it here would push the constraint onto
+# every project that builds on a GitHub runner, and onto releases already
+# published, whose attestation binds to the run that produced them and cannot
+# be reissued for a repacked file.
+CONTROL_DECOMPRESSORS: tuple[str, ...] = (".gz", ".xz", ".bz2", ".zst")
+
+
+def zstd_control(compressed: BinaryIO, package: Path) -> BinaryIO:
+    if zstd_module is None:
+        fail(
+            f"cannot decompress control metadata from {package.name}: this "
+            "interpreter has no compression.zstd; the renderer needs Python 3.14"
+        )
+    return zstd_module.ZstdFile(compressed, mode="rb")
+
+
 def decompress_control(name: str, payload: bytes, package: Path) -> bytes:
     compressed = io.BytesIO(payload)
     try:
@@ -168,10 +198,15 @@ def decompress_control(name: str, payload: bytes, package: Path) -> bytes:
             source = lzma.LZMAFile(compressed, mode="rb")
         elif name.endswith(".bz2"):
             source = bz2.BZ2File(compressed, mode="rb")
+        elif name.endswith(".zst"):
+            source = zstd_control(compressed, package)
         elif name == "control.tar":
             source = compressed
         else:
-            fail(f"unsupported Debian control compression in {name!r}")
+            fail(
+                f"unsupported Debian control compression in {name!r}; "
+                f"supported: control.tar and {', '.join(CONTROL_DECOMPRESSORS)}"
+            )
 
         output = io.BytesIO()
         while True:
@@ -186,7 +221,10 @@ def decompress_control(name: str, payload: bytes, package: Path) -> bytes:
             output.write(block)
         source.close()
         return output.getvalue()
-    except (EOFError, OSError, lzma.LZMAError) as error:
+    # ZstdError derives from Exception, not from OSError, so an undecodable
+    # frame would leave this function as a traceback rather than as a named
+    # abort unless it is named here.
+    except (EOFError, OSError, lzma.LZMAError) + ZSTD_ERRORS as error:
         fail(f"cannot decompress control metadata from {package.name}: {error}")
 
 

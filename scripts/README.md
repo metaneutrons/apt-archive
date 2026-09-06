@@ -83,6 +83,19 @@ kilobytes in size.
 `Packages.xz` is deliberately absent. Its bytes depend on the liblzma version,
 and the saving on an index of this size does not justify losing determinism.
 
+## The control member
+
+The renderer reads the `control.tar` ar member of every `.deb` in the pool and
+accepts `.gz`, `.xz`, `.bz2` and `.zst`, as well as an uncompressed
+`control.tar`. `.zst` matters in practice: `dpkg-deb` compresses both ar members
+uniformly unless `--no-uniform-compression` is given, and on Ubuntu that default
+is zstd, so a package built on a GitHub runner arrives that way. Reading it takes
+`compression.zstd`, stdlib from Python 3.14, which is what the pinned renderer
+image provides.
+
+A release that is already published cannot be repacked to suit the archive: its
+attestation binds to the workflow run that produced the exact bytes.
+
 ## What the renderer rejects
 
 Everything that would quietly damage an archive:
