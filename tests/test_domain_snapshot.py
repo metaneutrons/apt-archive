@@ -97,10 +97,11 @@ keep_versions = 5
         self.deb(self.pool, "beta", "1.0", "all")
         self.archive = self.make_archive(self.pool, "archive", self.epoch)
 
-    def deb(self, pool, package, version, arch):
+    def deb(self, pool, package, version, arch, control_compression="gz"):
         path = pool / f"{package}_{version}_{arch}.deb"
         build(path, {"Package": package, "Version": version, "Architecture": arch,
-                     "Maintainer": "Test <test@example.invalid>", "Description": "fixture"})
+                     "Maintainer": "Test <test@example.invalid>", "Description": "fixture"},
+              control_compression=control_compression)
         return path
 
     def sign(self, archive, epoch, subkey=None):
@@ -229,6 +230,24 @@ keep_versions = 5
         self.manifest.write_text(self.manifest.read_text().replace('packages = ["beta"]', 'packages = ["alpha"]'))
         with self.assertRaisesRegex(SystemExit, "ownership overlaps"):
             self.restore()
+
+    @unittest.skipIf(renderer.zstd_module is None,
+                     "compression.zstd is stdlib from 3.14; this interpreter is older")
+    def test_zstd_control_member_is_read_here_too(self):
+        """The snapshot runs on the runner, not in the pinned image.
+
+        It imports the renderer's control reader, so the interpreter floor has
+        to hold in both places; `compression.zstd` is stdlib from 3.14 on. This
+        stands apart from the shared fixture on purpose: `integration_apt.py`
+        reuses that one and runs on the system interpreter.
+        """
+        incoming = self.work / "zstd-incoming"
+        incoming.mkdir()
+        for arch in ("amd64", "arm64"):
+            self.deb(incoming, "alpha", "2.0", arch, control_compression="zst")
+        binaries = renderer.collect(incoming, renderer.load_domain(self.manifest), "main")
+        self.assertEqual(sorted(b.architecture for b in binaries), ["amd64", "arm64"])
+        self.assertEqual({b.version for b in binaries}, {"2.0"})
 
     def test_control_field_names_are_case_insensitive(self):
         for field in ("package", "pAcKaGe", "PACKAGE"):
