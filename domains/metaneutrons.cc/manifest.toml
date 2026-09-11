@@ -88,6 +88,16 @@ packages = ["bups"]
 keep_versions = 5
 
 [[projects]]
+# The M2 release workflow builds these natively in Bookworm and attaches each
+# signed, GitHub-attested package as freebasic-ng_<version>-1_<arch>.deb. The
+# archive selector validates the package identity from the file name and then
+# verifies the control data and provenance again before signing the repository.
+name = "freebasic-ng"
+source_repo = "metaneutrons/freebasic-ng"
+packages = ["freebasic-ng"]
+keep_versions = 5
+
+[[projects]]
 # The window is three, not five. png2lvgl was released by an earlier pipeline up
 # to v0.3.5, and those .deb files carry no attestation, so a window of five would
 # reach them and abort the ingest by design. v0.3.9, v0.3.11 and v0.3.12 are
