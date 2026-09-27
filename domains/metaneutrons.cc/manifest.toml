@@ -106,3 +106,12 @@ name = "png2lvgl"
 source_repo = "metaneutrons/png2lvgl"
 packages = ["png2lvgl"]
 keep_versions = 3
+
+[[projects]]
+# devknx is pending until its first stable release supplies attested Debian
+# packages. The source repository publishes devknx_<version>-1_<arch>.deb for
+# amd64 and arm64; this central archive alone signs and serves the APT index.
+name = "devknx"
+source_repo = "metaneutrons/devknx"
+packages = ["devknx"]
+keep_versions = 5
