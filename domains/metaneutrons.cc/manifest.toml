@@ -115,3 +115,13 @@ name = "devknx"
 source_repo = "metaneutrons/devknx"
 packages = ["devknx"]
 keep_versions = 5
+
+[[projects]]
+# morphos-cross attaches morphos-cross_<version>_<arch>.deb for amd64 and arm64 to its stable releases. The
+# version is the release version, 20260529-r2: the SDK date and the revision, with the revision as the
+# Debian revision. Every package is attested by the release workflow. The releases before the first one
+# that carries packages have none, and the selection passes over them, so five is safe.
+name = "morphos-cross"
+source_repo = "metaneutrons/morphos-cross"
+packages = ["morphos-cross"]
+keep_versions = 5
