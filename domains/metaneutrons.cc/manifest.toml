@@ -125,3 +125,9 @@ name = "morphos-cross"
 source_repo = "metaneutrons/morphos-cross"
 packages = ["morphos-cross"]
 keep_versions = 5
+
+[[projects]]
+name = "ami-rust"
+source_repo = "metaneutrons/ami-rust"
+packages = ["ami-rust"]
+keep_versions = 5
