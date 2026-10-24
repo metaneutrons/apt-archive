@@ -31,4 +31,15 @@ source_repo = "SnapDogRocks/snapdog"
 packages = ["snapdog", "snapdog-client"]
 # How many releases are kept in the pool. Without a limit it grows without
 # bound and every run downloads everything again.
-keep_versions = 5
+#
+# Two rather than five: snapdog attached .deb files to its releases before it
+# attested them. Attestation began with the v0.27.5 pipeline, so v0.27.4 and
+# older carry packages the ingest refuses, and refuses rightly:
+#
+#   AR180 attestation verification failed for snapdog-client_0.27.4-1_amd64.deb
+#
+# Attestation cannot be added afterwards, it binds to a workflow run. v0.27.5
+# and v0.27.7 have no release and v0.27.6 is a prerelease, so v0.27.8 is the
+# oldest attested stable release. Two keep v0.28.0 and v0.27.8 once v0.28.0 is
+# stable; five is safe again once five stable releases from v0.27.8 on exist.
+keep_versions = 2
