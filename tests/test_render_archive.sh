@@ -78,6 +78,125 @@ check "the wrapper creates its staging atomically with mktemp" \
 check "the wrapper uses no predictable PID path" \
   "$(grep -Fc '.render.$$' "$wrapper")" "0"
 
+mock_docker_bin="$work/mock-docker-bin"; mkdir -p "$mock_docker_bin"
+mock_docker_calls="$work/mock-docker-calls"
+cat > "$mock_docker_bin/docker" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+container_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+case "$1" in
+  run)
+    shift
+    cid_file=''
+    output_volume=''
+    while (($#)); do
+      case "$1" in
+        --cidfile) cid_file=$2; shift 2 ;;
+        --volume)
+          if [[ "$2" == *:/out:rw ]]; then output_volume=$2; fi
+          shift 2
+          ;;
+        *) shift ;;
+      esac
+    done
+    [[ -n "$cid_file" ]]
+    printf '%s' "$container_id" > "$cid_file"
+    printf 'run\n' >> "$MOCK_DOCKER_CALLS"
+    case "${MOCK_DOCKER_MODE:-failure}" in
+      failure) exit 137 ;;
+      signal)
+        kill -TERM "$PPID"
+        exit 0
+        ;;
+      success)
+        [[ "$output_volume" == *:/out:rw ]]
+        mkdir -p "${output_volume%:/out:rw}/archive"
+        ;;
+      *) exit 125 ;;
+    esac
+    ;;
+  inspect)
+    [[ "$2" == --format && "$4" == "$container_id" ]]
+    printf 'inspect\n' >> "$MOCK_DOCKER_CALLS"
+    if [[ "${MOCK_DOCKER_MODE:-failure}" == failure ]]; then
+      printf 'renderer diagnostics: OOMKilled=true Running=false ExitCode=137 MemoryBytes=536870912 MemorySwapBytes=536870912\n'
+    else
+      printf 'renderer diagnostics: OOMKilled=false Running=true ExitCode=0 MemoryBytes=536870912 MemorySwapBytes=536870912\n'
+    fi
+    ;;
+  rm)
+    [[ "$2" == --force && "$3" == "$container_id" ]]
+    printf 'rm\n' >> "$MOCK_DOCKER_CALLS"
+    ;;
+  *) exit 125 ;;
+esac
+SH
+chmod +x "$mock_docker_bin/docker"
+mock_manifest="$work/wrapper.toml"; manifest "$mock_manifest"
+mock_pool="$work/wrapper-pool"; mkdir -p "$mock_pool"
+mock_output="$work/wrapper-output"
+mock_stdout="$work/wrapper.stdout"; mock_stderr="$work/wrapper.stderr"
+if PATH="$mock_docker_bin:$PATH" MOCK_DOCKER_CALLS="$mock_docker_calls" \
+    "$wrapper" --manifest "$mock_manifest" --pool-dir "$mock_pool" \
+    --output-dir "$mock_output" --publication-epoch "$EPOCH" \
+    > "$mock_stdout" 2> "$mock_stderr"; then
+  mock_status=0
+else
+  mock_status=$?
+fi
+check "the wrapper preserves the renderer exit status" "$mock_status" "137"
+check "the wrapper inspects before removing only its container" \
+  "$(tr '\n' ' ' < "$mock_docker_calls")" "run inspect rm "
+check "the wrapper reports bounded failure diagnostics" \
+  "$(grep -F 'renderer diagnostics: OOMKilled=true Running=false ExitCode=137 MemoryBytes=536870912 MemorySwapBytes=536870912' "$mock_stderr")" \
+  "renderer diagnostics: OOMKilled=true Running=false ExitCode=137 MemoryBytes=536870912 MemorySwapBytes=536870912"
+check "a failed render does not publish its staging directory" \
+  "$([ ! -e "$mock_output" ] && echo no || echo yes)" "no"
+
+signal_calls="$work/signal-docker-calls"
+signal_stderr="$work/signal-wrapper.stderr"
+if PATH="$mock_docker_bin:$PATH" MOCK_DOCKER_MODE=signal \
+    MOCK_DOCKER_CALLS="$signal_calls" \
+    "$wrapper" --manifest "$mock_manifest" --pool-dir "$mock_pool" \
+    --output-dir "$work/signal-output" --publication-epoch "$EPOCH" \
+    > "$work/signal-wrapper.stdout" 2> "$signal_stderr"; then
+  signal_status=0
+else
+  signal_status=$?
+fi
+check "the wrapper preserves a TERM exit status" "$signal_status" "143"
+check "the wrapper inspects a signaled container before removal" \
+  "$(tr '\n' ' ' < "$signal_calls")" "run inspect rm "
+check "the wrapper reports bounded diagnostics for a signaled run" \
+  "$(grep -F 'renderer diagnostics: OOMKilled=false Running=true ExitCode=0 MemoryBytes=536870912 MemorySwapBytes=536870912' "$signal_stderr")" \
+  "renderer diagnostics: OOMKilled=false Running=true ExitCode=0 MemoryBytes=536870912 MemorySwapBytes=536870912"
+
+mock_rm_bin="$work/mock-rm-bin"; mkdir -p "$mock_rm_bin"
+cat > "$mock_rm_bin/rm" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+command -p rm "$@"
+exit 1
+SH
+chmod +x "$mock_rm_bin/rm"
+cleanup_calls="$work/cleanup-docker-calls"
+cleanup_stderr="$work/cleanup-wrapper.stderr"
+cleanup_output="$work/cleanup-output"
+if PATH="$mock_rm_bin:$mock_docker_bin:$PATH" MOCK_DOCKER_MODE=success \
+    MOCK_DOCKER_CALLS="$cleanup_calls" \
+    "$wrapper" --manifest "$mock_manifest" --pool-dir "$mock_pool" \
+    --output-dir "$cleanup_output" --publication-epoch "$EPOCH" \
+    > "$work/cleanup-wrapper.stdout" 2> "$cleanup_stderr"; then
+  cleanup_status=0
+else
+  cleanup_status=$?
+fi
+check "a cleanup failure fails an otherwise successful render" "$cleanup_status" "1"
+check "cleanup errors do not discard the rendered output" \
+  "$([ -d "$cleanup_output" ] && echo yes || echo no)" "yes"
+check "cleanup failures are reported as errors" \
+  "$(grep -Fc '::error::AR11' "$cleanup_stderr")" "2"
+
 # ---------------------------------------------------------------- T1
 t="T1  several packages, several versions, several architectures"
 m="$work/t1.toml"; manifest "$m"
