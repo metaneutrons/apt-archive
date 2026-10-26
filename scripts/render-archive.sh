@@ -144,7 +144,7 @@ renderer_cid_file="$renderer_state_dir/container-id"
 renderer_run_started=1
 if docker run --cidfile "$renderer_cid_file" --network none --read-only \
     --tmpfs /tmp:rw,noexec,nosuid,size=16m \
-    --memory 512m --memory-swap 512m --pids-limit 64 --cpus 2 \
+    --memory 2g --memory-swap 2g --pids-limit 64 --cpus 2 \
     --user "$(id -u):$(id -g)" \
     --volume "$script_root:/scripts:ro" \
     --volume "$manifest_dir:/manifest:ro" \
