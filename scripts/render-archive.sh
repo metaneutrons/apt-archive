@@ -86,7 +86,9 @@ cleanup_renderer() {
   if [[ -z "$renderer_container_id" && -n "$renderer_cid_file" \
         && -f "$renderer_cid_file" \
         && ! -L "$renderer_cid_file" ]]; then
-    if ! IFS= read -r renderer_container_id < "$renderer_cid_file"; then
+    if renderer_container_id=$(cat -- "$renderer_cid_file"); then
+      :
+    else
       renderer_container_id=''
     fi
   fi
@@ -157,7 +159,9 @@ else
 fi
 
 if [[ -f "$renderer_cid_file" && ! -L "$renderer_cid_file" ]]; then
-  if ! IFS= read -r renderer_container_id < "$renderer_cid_file"; then
+  if renderer_container_id=$(cat -- "$renderer_cid_file"); then
+    :
+  else
     renderer_container_id=''
   fi
 fi

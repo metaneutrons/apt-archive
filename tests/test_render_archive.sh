@@ -100,7 +100,7 @@ case "$1" in
       esac
     done
     [[ -n "$cid_file" ]]
-    printf '%s\n' "$container_id" > "$cid_file"
+    printf '%s' "$container_id" > "$cid_file"
     printf 'run\n' >> "$MOCK_DOCKER_CALLS"
     case "${MOCK_DOCKER_MODE:-failure}" in
       failure) exit 137 ;;
