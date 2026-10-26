@@ -72,17 +72,98 @@ output_dir="$parent/$(basename -- "$output_dir")"
 
 staging=$(mktemp -d "$parent/.render.XXXXXX") \
   || fail "cannot create renderer staging directory below $parent"
-trap 'rm -rf -- "$staging"' EXIT
+renderer_state_dir=''
+renderer_cid_file=''
+renderer_container_id=''
+renderer_run_started=0
 
-docker run --rm --network none --read-only \
-  --tmpfs /tmp:rw,noexec,nosuid,size=16m \
-  --memory 512m --memory-swap 512m --pids-limit 64 --cpus 2 \
-  --user "$(id -u):$(id -g)" \
-  --volume "$script_root:/scripts:ro" \
-  --volume "$manifest_dir:/manifest:ro" \
-  --volume "$(cd "$pool_dir" && pwd -P):/pool:ro" \
-  --volume "$staging:/out:rw" \
-  python:3.14.2-slim-bookworm@sha256:e87711ef5c86aaeaa7031718a69db79d334d94c545c709583f651b8185870941 \
-  python3 /scripts/render_archive.py "${args[@]}"
+cleanup_renderer() {
+  local status=$?
+  local cleanup_failed=0
+  trap - EXIT
+  trap ':' INT TERM
+
+  if [[ -z "$renderer_container_id" && -n "$renderer_cid_file" \
+        && -f "$renderer_cid_file" \
+        && ! -L "$renderer_cid_file" ]]; then
+    if ! IFS= read -r renderer_container_id < "$renderer_cid_file"; then
+      renderer_container_id=''
+    fi
+  fi
+  if (( status != 0 && renderer_run_started != 0 )); then
+    if [[ "$renderer_container_id" =~ ^[[:xdigit:]]{64}$ ]]; then
+      if renderer_diagnostics=$(docker inspect --format \
+          'renderer diagnostics: OOMKilled={{.State.OOMKilled}} Running={{.State.Running}} ExitCode={{.State.ExitCode}} MemoryBytes={{.HostConfig.Memory}} MemorySwapBytes={{.HostConfig.MemorySwap}}' \
+          "$renderer_container_id" 2>/dev/null); then
+        printf '%s\n' "$renderer_diagnostics" >&2
+      else
+        printf '::warning::AR114 renderer container diagnostics unavailable\n' >&2
+      fi
+    else
+      printf '::warning::AR114 renderer container diagnostics unavailable\n' >&2
+    fi
+  fi
+  if [[ "$renderer_container_id" =~ ^[[:xdigit:]]{64}$ ]]; then
+    if docker rm --force "$renderer_container_id" >/dev/null 2>&1; then
+      renderer_container_id=''
+    else
+      printf '::error::AR111 failed to remove renderer container\n' >&2
+      cleanup_failed=1
+    fi
+  elif [[ -n "$renderer_container_id" ]]; then
+    printf '::error::AR111 renderer container ID was invalid; it was not removed\n' >&2
+    cleanup_failed=1
+  fi
+  if [[ -n "$renderer_state_dir" ]]; then
+    if rm -rf -- "$renderer_state_dir"; then
+      :
+    else
+      printf '::error::AR112 failed to remove renderer state directory\n' >&2
+      cleanup_failed=1
+    fi
+  fi
+  if rm -rf -- "$staging"; then
+    :
+  else
+    printf '::error::AR113 failed to remove renderer staging directory\n' >&2
+    cleanup_failed=1
+  fi
+  if (( status == 0 && cleanup_failed != 0 )); then status=1; fi
+  exit "$status"
+}
+trap cleanup_renderer EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+renderer_state_dir=$(mktemp -d "${TMPDIR:-/tmp}/apt-renderer.XXXXXX") \
+  || fail 'cannot create renderer state directory'
+renderer_cid_file="$renderer_state_dir/container-id"
+
+renderer_run_started=1
+if docker run --cidfile "$renderer_cid_file" --network none --read-only \
+    --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+    --memory 512m --memory-swap 512m --pids-limit 64 --cpus 2 \
+    --user "$(id -u):$(id -g)" \
+    --volume "$script_root:/scripts:ro" \
+    --volume "$manifest_dir:/manifest:ro" \
+    --volume "$(cd "$pool_dir" && pwd -P):/pool:ro" \
+    --volume "$staging:/out:rw" \
+    python:3.14.2-slim-bookworm@sha256:e87711ef5c86aaeaa7031718a69db79d334d94c545c709583f651b8185870941 \
+    python3 /scripts/render_archive.py "${args[@]}"; then
+  :
+else
+  renderer_status=$?
+  exit "$renderer_status"
+fi
+
+if [[ -f "$renderer_cid_file" && ! -L "$renderer_cid_file" ]]; then
+  if ! IFS= read -r renderer_container_id < "$renderer_cid_file"; then
+    renderer_container_id=''
+  fi
+fi
+if [[ ! "$renderer_container_id" =~ ^[[:xdigit:]]{64}$ ]]; then
+  printf '::error::AR115 Docker succeeded without a valid renderer container ID\n' >&2
+  exit 1
+fi
 
 mv "$staging/archive" "$output_dir"
