@@ -77,10 +77,14 @@ jobs:
             metaneutrons.cc|snapdog.cc) ;;
             *) echo "::error::unknown domain '$IN_DOMAIN'"; exit 1 ;;
           esac
-          printf '%s' "$IN_PROJECT" | grep -Eq '^([a-z0-9][a-z0-9-]{1,63})?$' \
-            || { echo "::error::unsafe project name"; exit 1; }
-          printf '%s' "$IN_RETIRE_PROJECT" | grep -Eq '^([a-z0-9][a-z0-9-]{1,63})?$' \
-            || { echo "::error::unsafe retirement project name"; exit 1; }
+          if [[ -n "$IN_PROJECT" ]]; then
+            printf '%s\n' "$IN_PROJECT" | grep -Eq '^[a-z0-9][a-z0-9-]{1,63}$' \
+              || { echo "::error::unsafe project name"; exit 1; }
+          fi
+          if [[ -n "$IN_RETIRE_PROJECT" ]]; then
+            printf '%s\n' "$IN_RETIRE_PROJECT" | grep -Eq '^[a-z0-9][a-z0-9-]{1,63}$' \
+              || { echo "::error::unsafe retirement project name"; exit 1; }
+          fi
           manifest="domains/${IN_DOMAIN}/manifest.toml"
           [ -f "$manifest" ] || { echo "::error::no manifest for $IN_DOMAIN"; exit 1; }
           if [[ -n "$IN_RETIRE_PROJECT" ]]; then
