@@ -244,7 +244,13 @@ pub fn run() -> Result<()> {
             version,
         } => {
             let manifest = Manifest::load(&manifest)?;
-            let release: handoff::GithubRelease = read_stdin_json()?;
+            let mut releases: Vec<handoff::GithubRelease> = read_stdin_json()?;
+            if releases.len() != 1 {
+                return Err(
+                    "AR175 signed channel handoff requires exactly one release response".into(),
+                );
+            }
+            let release = releases.pop().unwrap();
             for row in handoff::select(&manifest, &project, &handoff_path, &version, &release)? {
                 println!("{}\t{}\t{}\t{}\t{}", row.0, row.1, row.2, row.3, row.4);
             }
