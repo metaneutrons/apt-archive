@@ -774,9 +774,7 @@ fn verified_release(
     let hashes = parse_release(manifest, &release)?;
     for algorithm in ["SHA256", "SHA512"] {
         for (relative, (digest, size)) in &hashes[algorithm] {
-            let parent = Path::new(relative)
-                .parent()
-                .map_or_else(String::new, |path| format!("{}/", path.display()));
+            let parent = index_parent_prefix(Path::new(relative));
             let target = work.join("indexes").join(algorithm).join(relative);
             store.get(
                 &format!("{suite}/{parent}by-hash/{algorithm}/{digest}"),
@@ -963,10 +961,7 @@ fn verify_candidate_inventory(
             manifest.release.suite,
             relative.display()
         ));
-        let parent = relative
-            .parent()
-            .filter(|path| !path.as_os_str().is_empty())
-            .map_or_else(String::new, |path| format!("{}/", path.display()));
+        let parent = index_parent_prefix(relative);
         for algorithm in ["SHA256", "SHA512"] {
             expected.insert(format!(
                 "dists/{}/{parent}by-hash/{algorithm}/{}",
@@ -1174,6 +1169,13 @@ fn digest_for(path: &Path, algorithm: &str) -> Result<String> {
     })
 }
 
+fn index_parent_prefix(relative: &Path) -> String {
+    relative
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .map_or_else(String::new, |path| format!("{}/", path.display()))
+}
+
 fn digest_length(algorithm: &str) -> usize {
     if algorithm == "SHA256" { 64 } else { 128 }
 }
@@ -1195,4 +1197,19 @@ fn set_mode(path: &Path, mode: u32) -> Result<()> {
 #[cfg(not(unix))]
 fn set_mode(_path: &Path, _mode: u32) -> Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::index_parent_prefix;
+    use std::path::Path;
+
+    #[test]
+    fn by_hash_parent_prefix_handles_root_and_nested_indexes() {
+        assert_eq!(index_parent_prefix(Path::new("archive-state.json")), "");
+        assert_eq!(
+            index_parent_prefix(Path::new("main/binary-amd64/Packages")),
+            "main/binary-amd64/"
+        );
+    }
 }
