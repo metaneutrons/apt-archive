@@ -29,6 +29,8 @@ One domain has one signed inventory and one publication clock.
    restores every signed index and retained package, rejects rollback and
    same-version replacement, merges the new import and applies the manifest's
    retention window. An empty request performs a metadata-only refresh.
+   A manifest-pinned `--retire-project` request removes only the exact declared
+   inventory, cannot import packages and leaves physical objects untouched.
 4. `render-archive.sh` creates the pool, indexes, both by-hash trees,
    `archive-state.json`, landing page and unsigned `Release`.
 5. `sign-archive.sh` verifies the subkey-only signing bundle and creates
@@ -70,6 +72,12 @@ scripts/fetch-packages.sh \
 target/release/apt-archive-tool snapshot-prepare \
   --manifest domains/metaneutrons.cc/manifest.toml \
   --project ami-rust --incoming-pool /new/incoming \
+  --output-pool /new/pool --baseline /new/baseline.json
+
+# One-shot reset declared under [[retirements]] in the manifest:
+target/release/apt-archive-tool snapshot-prepare \
+  --manifest domains/metaneutrons.cc/manifest.toml \
+  --retire-project ami-rust \
   --output-pool /new/pool --baseline /new/baseline.json
 
 scripts/render-archive.sh \

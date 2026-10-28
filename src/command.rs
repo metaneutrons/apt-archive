@@ -47,6 +47,12 @@ enum Commands {
         #[arg(long)]
         project: Option<String>,
     },
+    ValidateRetirement {
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        project: String,
+    },
     SelectTags {
         #[arg(long)]
         keep: usize,
@@ -118,6 +124,8 @@ enum Commands {
         project: Option<String>,
         #[arg(long)]
         incoming_pool: Option<PathBuf>,
+        #[arg(long)]
+        retire_project: Option<String>,
         #[arg(long)]
         output_pool: PathBuf,
     },
@@ -216,7 +224,7 @@ pub fn run() -> Result<()> {
         }
         Commands::Project { manifest, project } => {
             let manifest = Manifest::load(&manifest)?;
-            let selected = manifest.project(&project)?;
+            let selected = manifest.import_project(&project)?;
             println!(
                 "{}\t{}\t{}\t{}",
                 selected.source_repo,
@@ -228,8 +236,12 @@ pub fn run() -> Result<()> {
         Commands::ValidateRequest { manifest, project } => {
             let manifest = Manifest::load(&manifest)?;
             if let Some(project) = project.as_deref().filter(|value| !value.is_empty()) {
-                manifest.project(project)?;
+                manifest.import_project(project)?;
             }
+        }
+        Commands::ValidateRetirement { manifest, project } => {
+            let manifest = Manifest::load(&manifest)?;
+            manifest.retirement(&project)?;
         }
         Commands::SelectTags { keep } => select_tags(keep)?,
         Commands::SelectAssets {
@@ -325,11 +337,13 @@ pub fn run() -> Result<()> {
             baseline,
             project,
             incoming_pool,
+            retire_project,
             output_pool,
         } => snapshot::prepare(
             &manifest,
             project.as_deref(),
             incoming_pool.as_deref(),
+            retire_project.as_deref(),
             &output_pool,
             &baseline,
         )?,

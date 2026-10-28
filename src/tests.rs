@@ -1,4 +1,4 @@
-use crate::{archive, handoff, manifest::Manifest, snapshot};
+use crate::{archive, deb, handoff, manifest::Manifest, snapshot};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
@@ -117,6 +117,63 @@ fn signed_handoff_selects_exact_public_packages() {
     let selected =
         handoff::select(&manifest, "ami-rust", &handoff_path, "0.3.0", &release).unwrap();
     assert_eq!(selected.len(), 2);
+}
+
+#[test]
+fn retirement_removes_only_the_exact_declared_inventory() {
+    let temporary = TempDir::new().unwrap();
+    let manifest_path = temporary.path().join("manifest.toml");
+    let base_manifest = test_manifest("TBD", "TBD");
+    fs::write(&manifest_path, &base_manifest).unwrap();
+    let manifest = Manifest::load(&manifest_path).unwrap();
+    let pool = temporary.path().join("pool");
+    fs::create_dir(&pool).unwrap();
+    make_deb(&pool.join("demo_1.0.0_amd64.deb"), "demo", "1.0.0", "amd64");
+    make_deb(
+        &pool.join("ami-rust_0.3.3-1_amd64.deb"),
+        "ami-rust",
+        "0.3.3-1",
+        "amd64",
+    );
+    make_deb(
+        &pool.join("ami-rust_0.3.3-1_arm64.deb"),
+        "ami-rust",
+        "0.3.3-1",
+        "arm64",
+    );
+    let binaries = deb::collect(&pool, &manifest, &manifest.all_packages(), "main").unwrap();
+    let retirement = binaries
+        .iter()
+        .filter(|binary| binary.package == "ami-rust")
+        .cloned()
+        .collect::<Vec<_>>();
+    let digest = snapshot::retirement_inventory_digest(&retirement).unwrap();
+    fs::write(
+        &manifest_path,
+        format!(
+            "{base_manifest}\n[[retirements]]\nproject = \"ami-rust\"\ninventory_sha256 = \"{digest}\"\n"
+        ),
+    )
+    .unwrap();
+    let manifest = Manifest::load(&manifest_path).unwrap();
+    assert!(manifest.import_project("ami-rust").is_err());
+    assert!(manifest.import_project("demo").is_ok());
+    let (retained, retired) =
+        snapshot::retire_project_inventory(&manifest, binaries.clone(), "ami-rust").unwrap();
+    assert_eq!(retired, 2);
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].package, "demo");
+
+    fs::write(
+        &manifest_path,
+        format!(
+            "{base_manifest}\n[[retirements]]\nproject = \"ami-rust\"\ninventory_sha256 = \"{}\"\n",
+            "0".repeat(64)
+        ),
+    )
+    .unwrap();
+    let altered = Manifest::load(&manifest_path).unwrap();
+    assert!(snapshot::retire_project_inventory(&altered, binaries, "ami-rust").is_err());
 }
 
 fn make_deb(path: &Path, package: &str, version: &str, architecture: &str) {
