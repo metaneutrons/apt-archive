@@ -40,7 +40,7 @@ for name in manifest archive_dir publication_epoch; do
   [[ -n "${!name}" ]] || fail "--${name//_/-} is required"
 done
 command -v aws >/dev/null || fail 'the AWS CLI is required for the R2 endpoint'
-command -v python3 >/dev/null || fail 'python3 is required'
+command -v jq >/dev/null || fail 'jq is required'
 [[ -f "$manifest"    && ! -L "$manifest"    ]] || fail 'manifest must be a regular file'
 [[ -d "$archive_dir" && ! -L "$archive_dir" ]] || fail 'archive-dir must be a real directory'
 [[ "$publication_epoch" =~ ^[1-9][0-9]*$ ]] \
@@ -50,28 +50,26 @@ command -v python3 >/dev/null || fail 'python3 is required'
 : "${R2_SECRET_ACCESS_KEY:?R2_SECRET_ACCESS_KEY is not set}"
 
 script_root=$(unset CDPATH; cd -- "$(dirname -- "$0")" && pwd -P)
-planner="$script_root/publication_plan.py"
-[[ -f "$planner" && ! -L "$planner" ]] || fail 'the publication planner is missing or unsafe'
+archive_tool=${AR_ARCHIVE_TOOL:-"$script_root/../target/release/apt-archive-tool"}
+[[ -x "$archive_tool" && ! -L "$archive_tool" ]] \
+  || fail 'the Rust archive tool is missing or unsafe'
 
 # The planner runs exactly once. Called twice, the numbers could drift apart
 # if the tree changes in between.
-plan_json=$(python3 "$planner" --manifest "$manifest" ${project:+--project "$project"} \
-              --archive-dir "$archive_dir" --publication-epoch "$publication_epoch" \
-              --format json) \
+plan_args=(plan --manifest "$manifest" --archive-dir "$archive_dir"
+           --publication-epoch "$publication_epoch" --format json)
+[[ -n "$project" ]] && plan_args+=(--project "$project")
+plan_json=$("$archive_tool" "${plan_args[@]}") \
   || fail 'cannot compute the publication plan'
 
-plan=$(printf '%s' "$plan_json" | python3 -c '
-import json, sys
-for e in json.load(sys.stdin)["entries"]:
-    print("\t".join((e["phase"], e["local"], e["key"], e["content_type"], str(e["size"]))))
-') || fail 'cannot render the publication plan'
+plan=$(printf '%s' "$plan_json" |
+  jq -r '.entries[] | [.phase,.local,.key,.content_type,(.size|tostring)] | @tsv') \
+  || fail 'cannot render the publication plan'
 [[ -n "$plan" ]] || fail 'the publication plan is empty'
 
-target=$(printf '%s' "$plan_json" | python3 -c '
-import json, sys
-m = json.load(sys.stdin)["meta"]
-print(m["bucket"], m["account_id"], m["base_url"])
-') || fail 'cannot read the publication target from the manifest'
+target=$(printf '%s' "$plan_json" |
+  jq -r '.meta | [.bucket,.account_id,.base_url] | @tsv') \
+  || fail 'cannot read the publication target from the manifest'
 read -r bucket account_id base_url <<< "$target"
 for name in bucket account_id base_url; do
   [[ -n "${!name}" ]] || fail "the manifest carries no $name"
@@ -102,14 +100,14 @@ aws_r2=(aws s3api --endpoint-url "$endpoint")
 # The full signed domain must have been restored before this candidate was
 # rendered. Compare its generation and every immutable object before any PUT.
 [[ -n "$baseline" && -f "$baseline" && ! -L "$baseline" ]] \
-  || fail 'a regular --baseline from domain_snapshot.py prepare is required'
+  || fail 'a regular --baseline from snapshot-prepare is required'
 transaction=$(mktemp -d /tmp/apt-domain-publish.XXXXXX)
 trap 'rm -rf -- "$transaction"' EXIT
 printf '%s' "$plan_json" > "$transaction/plan.json"
-python3 "$script_root/verify_publication.py" --manifest "$manifest" \
+"$archive_tool" verify-publication --manifest "$manifest" \
   --archive-dir "$archive_dir" --publication-epoch "$publication_epoch" --local-only \
   || fail 'signed candidate integrity failed; nothing written'
-plan=$(python3 "$script_root/domain_snapshot.py" guard --manifest "$manifest" \
+plan=$("$archive_tool" snapshot-guard --manifest "$manifest" \
   --baseline "$baseline" --plan "$transaction/plan.json") \
   || fail 'domain generation or immutable-object preflight failed; nothing written'
 
@@ -143,7 +141,7 @@ for phase in keyring pool indexes page release; do
   # Release.gpg, then InRelease. After exit code 1 xargs carries on with the
   # next record; with these three metadata files that must not happen.
   if [[ "$phase" == release ]]; then
-    previous_etag=$(python3 "$script_root/domain_snapshot.py" commit-guard \
+    previous_etag=$("$archive_tool" snapshot-commit-guard \
       --manifest "$manifest" --baseline "$baseline") \
       || fail 'generation changed before commit; later metadata was not uploaded'
     printf 'uploading phase %s, %s objects, strictly sequential\n' "$phase" "$count"
@@ -167,6 +165,9 @@ for phase in keyring pool indexes page release; do
   parallel=8
   printf 'uploading phase %s, %s objects, parallelism %s\n' "$phase" "$count" "$parallel"
 
+  # The single-quoted helper must expand positional parameters only inside the
+  # child shell, not in this publisher process.
+  # shellcheck disable=SC2016
   printf '%s\n' "$subset" |
     awk -F'\t' '{printf "%s%c%s%c%s%c", $2, 0, $3, 0, $4, 0}' |
     xargs -0 -n 3 -P "$parallel" sh -c '

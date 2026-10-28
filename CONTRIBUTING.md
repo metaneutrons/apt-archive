@@ -21,9 +21,17 @@ brew install lefthook && lefthook install
 ```
 
 The installation sets up `commit-msg`, `pre-commit` and `pre-push`. The
-pre-commit hook compiles nothing; the full contract suites stay in CI. `git
+pre-commit hook compiles nothing; the Rust contract suite stays in CI. `git
 commit --no-verify` is not a way around this: `Commit hygiene` checks the PR
 title, the PR body and the commit metadata again on the server.
+
+Before pushing a production change:
+
+```bash
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+```
 
 ## Before any change to publication
 

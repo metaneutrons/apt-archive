@@ -54,6 +54,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Build the pinned Rust archive tool
+        run: cargo build --release --locked
+
       - name: Resolve and validate the request
         id: resolve
         env:
@@ -71,16 +74,9 @@ jobs:
             || { echo "::error::unsafe project name"; exit 1; }
           manifest="domains/${IN_DOMAIN}/manifest.toml"
           [ -f "$manifest" ] || { echo "::error::no manifest for $IN_DOMAIN"; exit 1; }
-          MANIFEST="$manifest" PROJECT="$IN_PROJECT" python3 - <<'PY'
-          import os, tomllib
-          with open(os.environ["MANIFEST"], "rb") as handle:
-              data = tomllib.load(handle)
-          names = [p.get("name") for p in data.get("projects", [])]
-          if os.environ["PROJECT"] and os.environ["PROJECT"] not in names:
-              raise SystemExit(
-                  f"project {os.environ['PROJECT']!r} is not in the manifest; "
-                  f"declared: {', '.join(map(str, names))}")
-          PY
+          args=(validate-request --manifest "$manifest")
+          [ -n "$IN_PROJECT" ] && args+=(--project "$IN_PROJECT")
+          target/release/apt-archive-tool "${args[@]}"
           printf 'domain=%s\n' "$IN_DOMAIN" >> "$GITHUB_OUTPUT"
           printf 'project=%s\n' "$IN_PROJECT" >> "$GITHUB_OUTPUT"
 
@@ -116,7 +112,7 @@ jobs:
           # Only then may the read-only bucket check use the environment
           # secrets.
           MANIFEST="domains/${{ steps.resolve.outputs.domain }}/manifest.toml"
-          target=$(python3 scripts/publication_target.py --manifest "$MANIFEST") \
+          target=$(target/release/apt-archive-tool target --manifest "$MANIFEST") \
             || { echo '::error::invalid R2 publication target'; exit 1; }
           IFS=$'\t' read -r bucket account <<< "$target"
           AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID" \
@@ -139,17 +135,23 @@ jobs:
         with:
           persist-credentials: false
 
-      # `domain_snapshot.py` imports the renderer's control reader and runs
-      # here, on the runner, not in the pinned image. It therefore needs the
-      # same interpreter floor: `compression.zstd` is stdlib from 3.14, and
-      # ubuntu-24.04 ships 3.12. Without this the merge step aborts on a
-      # package the renderer itself could read:
-      #
-      #   AR100 cannot decompress control metadata from ugos-cli_0.13.2_amd64.deb:
-      #   this interpreter has no compression.zstd
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.14'
+      - name: Build the pinned Rust archive tool
+        run: cargo build --release --locked
+
+      - name: Acquire the pinned cosign verifier for ami-rust
+        if: needs.preflight.outputs.project == 'ami-rust'
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --fail --location --max-time 120 --max-filesize 141178250 \
+            --output "$RUNNER_TEMP/cosign" \
+            https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign-linux-amd64
+          test "$(wc -c < "$RUNNER_TEMP/cosign")" = 141178250
+          printf '%s  %s\n' \
+            4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71 \
+            "$RUNNER_TEMP/cosign" | sha256sum --check --status
+          chmod 700 "$RUNNER_TEMP/cosign"
+          printf '%s\n' "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
       - name: Fetch the packages and verify their attestation
         if: needs.preflight.outputs.project != ''
@@ -175,7 +177,7 @@ jobs:
           if [[ -n "$IN_PROJECT" ]]; then
             import_args=(--project "$IN_PROJECT" --incoming-pool "$RUNNER_TEMP/incoming")
           fi
-          python3 scripts/domain_snapshot.py prepare \
+          target/release/apt-archive-tool snapshot-prepare \
             --manifest "domains/${{ needs.preflight.outputs.domain }}/manifest.toml" \
             --output-pool "$RUNNER_TEMP/pool" --baseline "$RUNNER_TEMP/baseline.json" \
             "${import_args[@]}"

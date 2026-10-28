@@ -9,6 +9,11 @@ release with a build provenance attestation; this repository fetches them,
 verifies that attestation, renders the archive metadata, signs it, publishes it
 to R2 and then checks the public URL against what it just built.
 
+For `ami-rust`, a provenance attestation alone is insufficient. The fetcher
+also verifies the protected release workflow's signed `channel-handoff.json`
+and accepts only the exact package sizes and SHA-256 identities named there.
+The package channel never rebuilds or modifies SDK payloads.
+
 ## The trust model
 
 An APT client trusts an archive because of one signature over one file. Being
@@ -96,12 +101,15 @@ domains/
   metaneutrons.cc/manifest.toml   projects, bucket, subkey, base URL
   snapdog.cc/manifest.toml
 scripts/                          renderer, fetch, sign, publish, verify
-tests/                            renderer, trust, transaction and publication contracts
+src/                              single Rust implementation and contract tests
 ```
 
 The renderer and the workflows are shared and read the manifest. If a domain
 ever needs to split off, its directory moves into a new repository without any
 code travelling with it.
+
+`rust-toolchain.toml` and `Cargo.lock` pin the production build. Active source,
+CI, publication and recovery paths execute no Python.
 
 [`scripts/README.md`](scripts/README.md) documents every stage in detail: what
 the renderer rejects, why by-hash is mirrored under every hash, how the

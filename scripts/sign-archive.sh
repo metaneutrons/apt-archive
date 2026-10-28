@@ -36,7 +36,7 @@ done
 for name in manifest archive_dir private_key passphrase_file publication_epoch; do
   [[ -n "${!name}" ]] || fail "--${name//_/-} is required"
 done
-for command in gpg gpgv gpgconf python3; do
+for command in gpg gpgv gpgconf; do
   command -v "$command" >/dev/null || fail "required command is missing: $command"
 done
 [[ -f "$manifest"        && ! -L "$manifest"        ]] || fail 'manifest must be a regular file'
@@ -47,25 +47,12 @@ done
 
 script_root=$(unset CDPATH; cd -- "$(dirname -- "$0")" && pwd -P)
 archive_dir=$(unset CDPATH; cd -- "$archive_dir" && pwd -P)
+archive_tool=${AR_ARCHIVE_TOOL:-"$script_root/../target/release/apt-archive-tool"}
+[[ -x "$archive_tool" && ! -L "$archive_tool" ]] \
+  || fail 'the Rust archive tool is missing or unsafe'
 
 read -r fingerprint signing_subkey suite keyring_package < <(
-  MANIFEST="$manifest" python3 - <<'PY'
-import os, sys, tomllib
-with open(os.environ["MANIFEST"], "rb") as handle:
-    data = tomllib.load(handle)
-def need(section, key):
-    block = data.get(section)
-    if not isinstance(block, dict) or not isinstance(block.get(key), str):
-        raise SystemExit(f"[{section}] {key} must be a string")
-    value = block[key]
-    if value == "TBD":
-        raise SystemExit(f"[{section}] {key} is still TBD; generate the key first")
-    return value
-print(need("signing", "primary_fingerprint"),
-      need("signing", "signing_subkey"),
-      need("release", "suite"),
-      need("domain", "keyring_package"))
-PY
+  "$archive_tool" signing --manifest "$manifest"
 ) || fail 'manifest does not carry usable signing values'
 
 for value in "$fingerprint" "$signing_subkey"; do
@@ -79,10 +66,7 @@ release="$archive_dir/dists/$suite/Release"
 # The free epoch makes the renderer reproducible. Only a fresh tree may be
 # signed, though, one whose two time fields come from exactly the same
 # publication time. The 45-minute workflow stays inside the 60-minute window.
-time_validator="$script_root/release_time.py"
-[[ -f "$time_validator" && ! -L "$time_validator" ]] \
-  || fail 'Release time validator is missing or unsafe'
-python3 "$time_validator" --manifest "$manifest" --release "$release" \
+"$archive_tool" release-time --manifest "$manifest" --release "$release" \
   --publication-epoch "$publication_epoch" --max-age-seconds 3600 \
   || fail 'Release time validation failed before signing'
 
