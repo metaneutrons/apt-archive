@@ -130,3 +130,12 @@ name = "ami-rust"
 source_repo = "metaneutrons/ami-rust"
 packages = ["ami-rust"]
 keep_versions = 5
+
+# One-shot reset before metaneutrons/ami-rust is rebuilt as a new repository
+# with a fresh 0.1.0 release line. The digest covers the exact nine signed
+# package identities, pool paths, sizes and SHA-256 hashes published on
+# 2026-10-28. Normal imports remain blocked until this declaration is removed
+# after the new repository and release exist.
+[[retirements]]
+project = "ami-rust"
+inventory_sha256 = "3f09031e16236a508ae2ac271cd62b7a46ee7df89f558c7c65119a40129571e5"

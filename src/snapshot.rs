@@ -213,6 +213,7 @@ pub fn prepare(
     manifest_path: &Path,
     project: Option<&str>,
     incoming: Option<&Path>,
+    retire_project: Option<&str>,
     output: &Path,
     baseline_path: &Path,
 ) -> Result<()> {
@@ -220,15 +221,21 @@ pub fn prepare(
     if output.exists() || baseline_path.exists() {
         return Err("AR190 output pool and baseline must be new paths".into());
     }
+    if retire_project.is_some() && (project.is_some() || incoming.is_some()) {
+        return Err("AR190 retirement cannot be combined with an import".into());
+    }
     if project.is_some() != incoming.is_some() {
         return Err("AR190 project and incoming pool must be supplied together".into());
+    }
+    if let Some(project) = retire_project {
+        manifest.retirement(project)?;
     }
     let temporary = TempDir::new().map_err(io_error)?;
     let mut store = AwsStore::new(&manifest);
     let (prior, baseline) = restore(&manifest, &mut store, temporary.path())?;
     let mut current = Vec::new();
     if let (Some(project), Some(incoming)) = (project, incoming) {
-        let selected = manifest.project(project)?;
+        let selected = manifest.import_project(project)?;
         let allowed = selected.packages.iter().cloned().collect::<BTreeSet<_>>();
         let component = manifest.component(None)?;
         current = deb::collect(incoming, &manifest, &allowed, &component)?;
@@ -319,10 +326,13 @@ pub fn prepare(
         })
         .collect::<Vec<_>>();
     combined.extend(current);
-    let merged = if let Some(project) = project {
-        prune_project(&manifest, combined, project)?
+    let (merged, retired) = if let Some(project) = retire_project {
+        let (retained, retired) = retire_project_inventory(&manifest, combined, project)?;
+        (retained, retired)
+    } else if let Some(project) = project {
+        (prune_project(&manifest, combined, project)?, 0)
     } else {
-        combined
+        (combined, 0)
     };
     if merged.is_empty() || merged.len() > MAX_PACKAGES {
         return Err("AR190 merged archive inventory is empty or oversized".into());
@@ -355,11 +365,50 @@ pub fn prepare(
     fs::rename(&staging, output).map_err(io_error)?;
     write_json_new(baseline_path, &baseline)?;
     println!(
-        "prepared {} domain payloads; retained {}, imported {imported}",
+        "prepared {} domain payloads; retained {}, imported {imported}, retired {retired}",
         merged.len(),
         merged.len() - imported
     );
     Ok(())
+}
+
+pub(crate) fn retire_project_inventory(
+    manifest: &Manifest,
+    binaries: Vec<Binary>,
+    project: &str,
+) -> Result<(Vec<Binary>, usize)> {
+    let retirement = manifest.retirement(project)?;
+    let (retired, retained): (Vec<_>, Vec<_>) = binaries.into_iter().partition(|binary| {
+        manifest
+            .owner(&binary.package)
+            .is_ok_and(|owner| owner.name == project)
+    });
+    if retired.is_empty() {
+        return Err("AR190 retirement matched no published package".into());
+    }
+    let digest = retirement_inventory_digest(&retired)?;
+    if digest != retirement.inventory_sha256 {
+        return Err(format!(
+            "AR190 retirement inventory changed for {project}: expected {}, got {digest}",
+            retirement.inventory_sha256
+        ));
+    }
+    Ok((retained, retired.len()))
+}
+
+pub(crate) fn retirement_inventory_digest(binaries: &[Binary]) -> Result<String> {
+    let mut rows = binaries
+        .iter()
+        .map(|binary| {
+            let (size, sha256, _) = deb::file_hashes(&binary.source_path)?;
+            Ok(format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\n",
+                binary.package, binary.version, binary.architecture, binary.pool_path, size, sha256
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    rows.sort();
+    Ok(format!("{:x}", Sha256::digest(rows.concat().as_bytes())))
 }
 
 fn prune_project(manifest: &Manifest, binaries: Vec<Binary>, project: &str) -> Result<Vec<Binary>> {

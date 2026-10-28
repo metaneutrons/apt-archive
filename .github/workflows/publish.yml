@@ -20,6 +20,10 @@ on:
         description: Project name from the manifest (empty = re-sign the whole inventory)
         required: false
         type: string
+      retire_project:
+        description: Declared one-shot project retirement (cannot be combined with project)
+        required: false
+        type: string
   repository_dispatch:
     types: [publish-archive]
 
@@ -49,6 +53,7 @@ jobs:
     outputs:
       domain: ${{ steps.resolve.outputs.domain }}
       project: ${{ steps.resolve.outputs.project }}
+      retire_project: ${{ steps.resolve.outputs.retire_project }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -64,6 +69,8 @@ jobs:
           # outside and would otherwise be a shell injection vector.
           IN_DOMAIN: ${{ github.event.inputs.domain || github.event.client_payload.domain }}
           IN_PROJECT: ${{ github.event.inputs.project || github.event.client_payload.project }}
+          IN_RETIRE_PROJECT: ${{ github.event.inputs.retire_project }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           case "$IN_DOMAIN" in
@@ -72,13 +79,24 @@ jobs:
           esac
           printf '%s' "$IN_PROJECT" | grep -Eq '^([a-z0-9][a-z0-9-]{1,63})?$' \
             || { echo "::error::unsafe project name"; exit 1; }
+          printf '%s' "$IN_RETIRE_PROJECT" | grep -Eq '^([a-z0-9][a-z0-9-]{1,63})?$' \
+            || { echo "::error::unsafe retirement project name"; exit 1; }
           manifest="domains/${IN_DOMAIN}/manifest.toml"
           [ -f "$manifest" ] || { echo "::error::no manifest for $IN_DOMAIN"; exit 1; }
-          args=(validate-request --manifest "$manifest")
-          [ -n "$IN_PROJECT" ] && args+=(--project "$IN_PROJECT")
+          if [[ -n "$IN_RETIRE_PROJECT" ]]; then
+            [[ "$EVENT_NAME" == workflow_dispatch && -z "$IN_PROJECT" ]] \
+              || { echo "::error::retirement requires a manual dispatch without an import"; exit 1; }
+            args=(validate-retirement --manifest "$manifest" --project "$IN_RETIRE_PROJECT")
+          else
+            args=(validate-request --manifest "$manifest")
+            [ -n "$IN_PROJECT" ] && args+=(--project "$IN_PROJECT")
+          fi
           target/release/apt-archive-tool "${args[@]}"
-          printf 'domain=%s\n' "$IN_DOMAIN" >> "$GITHUB_OUTPUT"
-          printf 'project=%s\n' "$IN_PROJECT" >> "$GITHUB_OUTPUT"
+          {
+            printf 'domain=%s\n' "$IN_DOMAIN"
+            printf 'project=%s\n' "$IN_PROJECT"
+            printf 'retire_project=%s\n' "$IN_RETIRE_PROJECT"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Every value the run needs is present and well formed
         env:
@@ -171,11 +189,14 @@ jobs:
           AWS_DEFAULT_REGION: auto
           AWS_EC2_METADATA_DISABLED: 'true'
           IN_PROJECT: ${{ needs.preflight.outputs.project }}
+          IN_RETIRE_PROJECT: ${{ needs.preflight.outputs.retire_project }}
         run: |
           set -euo pipefail
           import_args=()
           if [[ -n "$IN_PROJECT" ]]; then
             import_args=(--project "$IN_PROJECT" --incoming-pool "$RUNNER_TEMP/incoming")
+          elif [[ -n "$IN_RETIRE_PROJECT" ]]; then
+            import_args=(--retire-project "$IN_RETIRE_PROJECT")
           fi
           target/release/apt-archive-tool snapshot-prepare \
             --manifest "domains/${{ needs.preflight.outputs.domain }}/manifest.toml" \

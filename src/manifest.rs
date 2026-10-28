@@ -17,6 +17,8 @@ pub struct Manifest {
     pub publication: Publication,
     pub release: Release,
     pub projects: Vec<Project>,
+    #[serde(default)]
+    pub retirements: Vec<Retirement>,
     #[serde(skip)]
     pub path: PathBuf,
 }
@@ -66,6 +68,13 @@ pub struct Project {
     pub keep_versions: usize,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Retirement {
+    pub project: String,
+    pub inventory_sha256: String,
+}
+
 fn regex(pattern: &'static str, slot: &'static OnceLock<Regex>) -> &'static Regex {
     slot.get_or_init(|| Regex::new(pattern).expect("static regular expression"))
 }
@@ -104,6 +113,7 @@ impl Manifest {
         static ACCOUNT: OnceLock<Regex> = OnceLock::new();
         static BUCKET: OnceLock<Regex> = OnceLock::new();
         static FINGERPRINT: OnceLock<Regex> = OnceLock::new();
+        static SHA256: OnceLock<Regex> = OnceLock::new();
 
         if self.domain.layout != "shared-root-v1" {
             return Err("AR100 domain layout must be shared-root-v1".into());
@@ -224,6 +234,18 @@ impl Manifest {
                 }
             }
         }
+        let mut retired = BTreeSet::new();
+        for retirement in &self.retirements {
+            if !retired.insert(retirement.project.as_str())
+                || self.project(&retirement.project).is_err()
+                || !regex(r"^[0-9a-f]{64}$", &SHA256).is_match(&retirement.inventory_sha256)
+            {
+                return Err(format!(
+                    "AR100 invalid or duplicate retirement for project: {}",
+                    retirement.project
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -232,6 +254,23 @@ impl Manifest {
             .iter()
             .find(|project| project.name == name)
             .ok_or_else(|| format!("AR100 project {name:?} is not declared exactly once"))
+    }
+
+    pub fn import_project(&self, name: &str) -> Result<&Project> {
+        let project = self.project(name)?;
+        if self.retirements.iter().any(|entry| entry.project == name) {
+            return Err(format!(
+                "AR100 project {name:?} has an active retirement and cannot be imported"
+            ));
+        }
+        Ok(project)
+    }
+
+    pub fn retirement(&self, name: &str) -> Result<&Retirement> {
+        self.retirements
+            .iter()
+            .find(|entry| entry.project == name)
+            .ok_or_else(|| format!("AR100 project {name:?} has no declared retirement"))
     }
 
     pub fn owner(&self, package: &str) -> Result<&Project> {

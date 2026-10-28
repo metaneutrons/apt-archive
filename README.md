@@ -130,6 +130,13 @@ their exact bytes. An empty project request refreshes the existing inventory
 without any release lookup. A missing `InRelease` permits bootstrap only in a
 genuinely empty bucket, never after an authorization error or partial upload.
 
+A one-shot project retirement is declared in the manifest with the SHA-256 of
+the exact signed package inventory it may remove. It is available only through
+a manual workflow dispatch, cannot be combined with an import and blocks new
+imports for that project until the declaration is removed. The transaction
+rewrites signed metadata but deliberately leaves old pool and by-hash objects
+untouched for later, separately authorised garbage collection.
+
 The pre-write gate rejects changed ownership, version rollback, same-version
 replacement, stale clocks, changed generations and immutable-object collisions.
 Immutable objects use conditional PUTs; `InRelease` is committed last with an
