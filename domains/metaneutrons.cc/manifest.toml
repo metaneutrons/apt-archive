@@ -126,6 +126,16 @@ packages = ["morphos-cross"]
 keep_versions = 5
 
 [[projects]]
+# pfs3 attaches pfs3_<version>-1_<arch>.deb and pfs3-fuse_<version>-1_<arch>.deb
+# for amd64 and arm64, hence two package names. Attestation covers v0.1.5 and
+# newer; v0.1.3 and older carry packages without it, which the ingest refuses.
+# v0.1.4 is a prerelease. A window of two therefore keeps v0.1.6 and v0.1.5.
+name = "pfs3"
+source_repo = "metaneutrons/pfs3"
+packages = ["pfs3", "pfs3-fuse"]
+keep_versions = 2
+
+[[projects]]
 name = "ami-rust"
 source_repo = "metaneutrons/ami-rust"
 packages = ["ami-rust"]
